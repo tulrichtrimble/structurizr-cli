@@ -1,0 +1,417 @@
+apiVersion: backstage.io/v1alpha1
+kind: Domain
+metadata:
+  name: shared
+  description: Cross-cutting platform capabilities
+spec:
+  owner: "group:default/users"
+---
+apiVersion: backstage.io/v1alpha1
+kind: Domain
+metadata:
+  name: identity
+  description: Construction finance in project management
+spec:
+  owner: "group:default/users"
+  subdomainOf: shared
+---
+apiVersion: backstage.io/v1alpha1
+kind: Domain
+metadata:
+  name: project-management
+  description: Project Management domain
+spec:
+  owner: "group:default/users"
+---
+apiVersion: backstage.io/v1alpha1
+kind: Domain
+metadata:
+  name: accounting
+  description: Construction finance in project management
+spec:
+  owner: "group:default/users"
+  subdomainOf: project-management
+---
+apiVersion: backstage.io/v1alpha1
+kind: System
+metadata:
+  name: product-management-system
+  description: "Manages software tenant provisioning and licensing"
+  tags:
+    - idesign-mgr
+spec:
+  owner: "group:default/users"
+  domain: shared
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: product-manager
+  description: "Orchestrates software tenant provisioning and licensing"
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+  tags:
+    - idesign-mgr
+spec:
+  type: Service
+  lifecycle: experimental
+  owner: "group:default/users"
+  system: "product-management-system"
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: service-registry
+  description: "Registers software tenants and locates instances"
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+  tags:
+    - idesign-resource-access
+spec:
+  type: Service
+  lifecycle: experimental
+  owner: "group:default/users"
+  system: "product-management-system"
+---
+apiVersion: backstage.io/v1alpha1
+kind: System
+metadata:
+  name: tyler-vista-test-system
+  description: "A Vista construction ERP"
+  tags:
+    - idesign-mgr
+spec:
+  owner: "group:default/users"
+  domain: accounting
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: tyler-vista-application
+  description: "Core Vista"
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+  tags:
+    - idesign-mgr
+spec:
+  type: WebApp
+  lifecycle: experimental
+  owner: "group:default/users"
+  system: "tyler-vista-test-system"
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: vista-connector-api
+  description: "Emits ERP events"
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+  tags:
+    - idesign-mgr
+spec:
+  type: WebApp
+  lifecycle: experimental
+  owner: "group:default/users"
+  system: "tyler-vista-test-system"
+---
+apiVersion: backstage.io/v1alpha1
+kind: System
+metadata:
+  name: entitlement-management-system
+  description: "Entitlement and License Management"
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+  tags:
+    - idesign-mgr
+spec:
+  owner: "group:default/users"
+  domain: shared
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: ems
+  description: "Entitlement Management Service"
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+  tags:
+    - idesign-mgr
+spec:
+  type: Service
+  lifecycle: experimental
+  owner: "group:default/users"
+  system: "entitlement-management-system"
+---
+apiVersion: backstage.io/v1alpha1
+kind: System
+metadata:
+  name: iam-management-system
+  description: "Identity and Access Management System"
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+  tags:
+    - idesign-mgr
+spec:
+  lifecycle: experimental
+  owner: "group:default/users"
+  domain: identity
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: iam-manager
+  description: "Identity and Access Management Public API"
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+  tags:
+    - idesign-mgr
+spec:
+  type: Service
+  lifecycle: experimental
+  owner: "group:default/users"
+  system: iam-management-system
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: tid-client
+  description: "Trimble Identity Client"
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+  tags:
+    - idesign-client
+spec:
+  type: Service
+  lifecycle: experimental
+  owner: "group:default/users"
+  system: iam-management-system
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: tid
+  description: "Trimble Identity"
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+  tags:
+    - idesign-resource-access
+spec:
+  type: Service
+  lifecycle: experimental
+  owner: "group:default/users"
+  system: iam-management-system
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: license-engine
+  description: "Entitlement Management Service"
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+  tags:
+    - idesign-engine
+spec:
+  type: Service
+  lifecycle: experimental
+  owner: "group:default/users"
+  system: "entitlement-management-system"
+---
+apiVersion: backstage.io/v1alpha1
+kind: System
+metadata:
+  name: trimble-admin-system
+  description: "Trimble Admin Console (Account Experience)"
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+  tags:
+    - idesign-mgr
+spec:
+  owner: "group:default/users"
+  domain: shared
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: axp
+  description: "Trimble Admin Console"
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+  tags:
+    - idesign-client
+spec:
+  type: WebApp
+  lifecycle: experimental
+  owner: "group:default/users"
+  system: "trimble-admin-system"
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: onboard-manager
+  description: "Onboard Manager (AXP backend)"
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+  tags:
+    - idesign-mgr
+spec:
+  type: Service
+  lifecycle: experimental
+  owner: "group:default/users"
+  system: "trimble-admin-system"
+---
+apiVersion: backstage.io/v1alpha1
+kind: System
+metadata:
+  name: workflow-engine-system
+  description: "Runs Elsa workflows"
+  tags:
+    - idesign-mgr
+spec:
+  owner: "group:default/users"
+  domain: shared
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: workflow-engine
+  description: "Runs Elsa workflows"
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+  tags:
+    - idesign-engine
+spec:
+  type: Service
+  lifecycle: experimental
+  owner: "group:default/users"
+  system: "workflow-engine-system"
+---
+apiVersion: backstage.io/v1alpha1
+kind: System
+metadata:
+  name: dx-system
+  description: "Digital Experience System"
+  tags:
+    - idesign-mgr
+spec:
+  owner: "group:default/users"
+  domain: shared
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: dx-salesforce-api
+  description: "Salesforce"
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+  tags:
+    - idesign-mgr
+spec:
+  type: Service
+  lifecycle: experimental
+  owner: "group:default/users"
+  system: dx-system
+---
+apiVersion: backstage.io/v1alpha1
+kind: System
+metadata:
+  name: construction-authorization-system
+  description: VPID, Team Authorization
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+  tags:
+    - idesign-mgr
+spec:
+  owner: "group:default/users"
+  domain: shared
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: data-distributor
+  description: "emits authorization attributes"
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+spec:
+  type: Service
+  lifecycle: experimental
+  owner: "group:default/users"
+  system: construction-authorization-system
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: vo-authorization
+  description: "stores authorization data"
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+spec:
+  type: Service
+  lifecycle: experimental
+  owner: "group:default/users"
+  system: construction-authorization-system
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: vo-authorization-engine
+  description: "Open Policy Agent"
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+spec:
+  type: Service
+  lifecycle: experimental
+  owner: "group:default/users"
+  system: construction-authorization-system
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: vpid
+  description: "ViewPoint authorization server"
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+spec:
+  type: Service
+  lifecycle: experimental
+  owner: "group:default/users"
+  system: construction-authorization-system
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: policy-registry
+  description: "Data store for authorization policies"
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+spec:
+  type: Service
+  lifecycle: experimental
+  owner: "group:default/users"
+  system: construction-authorization-system
+---
+apiVersion: backstage.io/v1alpha1
+kind: Component
+metadata:
+  name: analytics-data-pipeline
+  description: Data integration pipeline
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+  tags:
+    - idesign-utility
+spec:
+  type: Service
+  lifecycle: experimental
+  owner: "group:default/users"
+  system: construction-analytics-system
+---
+apiVersion: backstage.io/v1alpha1
+kind: System
+metadata:
+  name: construction-analytics-system
+  description: Analytics
+  annotations:
+    backstage.io/techdocs-ref: dir:.
+  tags:
+    - idesign-mgr
+spec:
+  owner: "group:default/users"
