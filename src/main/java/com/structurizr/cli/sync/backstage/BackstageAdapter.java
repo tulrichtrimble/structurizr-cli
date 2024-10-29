@@ -56,23 +56,29 @@ public class BackstageAdapter {
     // }
 
 
-    public Entity[] getEntitiesFromBackstage(String localEntityFile) throws Exception {
-        String json = "";
-        // try {
-        //     // loads the data from the Backstage demo instance
-        //     String url = "https://backstage.dev.trimble.tools/api/catalog/entities"; // "https://demo.backstage.io/api/catalog/entities"; 
-        //     HttpRequest request = HttpRequest.newBuilder(new URI(url)).build();
-        //     HttpResponse<String> response = HttpClient.newBuilder()
-        //             .build()
-        //             .send(request, HttpResponse.BodyHandlers.ofString());
+    public Entity[] getEntitiesFromBackstage(String location) throws Exception {
+        if (StringUtils.isNullOrEmpty(location)){
+            return null;
+        }
 
-        //     json = response.body();
-        // } catch (Exception e) {
-            // if this doesn't work, we'll use a snapshot of the demo data instead
-            if (localEntityFile != null) {
-                json = Files.readString(new File(localEntityFile).toPath());
+        String json = "";
+        if (location.startsWith("http")){
+            try {
+                HttpRequest request = HttpRequest.newBuilder(new URI(location)).build();
+                HttpResponse<String> response = HttpClient.newBuilder()
+                        .build()
+                        .send(request, HttpResponse.BodyHandlers.ofString());
+
+                json = response.body();
             }
-        //}
+            catch (Exception ex){
+                System.out.println("Error connecting to " + location + " - Are you on the network/VPN?" + ex.getMessage());
+                return null;
+            }
+        }
+        else{
+            json = Files.readString(new File(location).toPath());
+        }
 
         ObjectMapper objectMapper = new ObjectMapper();
         objectMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
