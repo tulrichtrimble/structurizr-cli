@@ -2,7 +2,7 @@ plugins {
 	id 'java'
 }
 
-defaultTasks 'clean', 'build', 'getDeps', 'buildZip'
+defaultTasks 'clean', 'build', 'getDeps', 'copyToBin'//, 'buildZip'
 
 description = 'Structurizr CLI'
 group = 'com.structurizr'
@@ -82,4 +82,34 @@ task buildZip(type: Zip) {
 		include 'structurizr.sh'
 		include 'structurizr.bat'
 	}
+}
+
+task copyToBin(type: Copy) {
+	into 'build/bin'
+
+	from('build/libs/') {
+		include 'structurizr-cli*.jar'
+		into 'lib'
+	}
+	from('build/dependencies') {
+		include '*.jar'
+		into 'lib'
+	}
+	from('.') {
+		include 'README.md'
+		include 'docs/*'
+		include 'docs/images/*'
+	}
+	from('etc') {
+		include 'structurizr.sh'
+		include 'structurizr.bat'
+	}
+
+	doLast {
+		println "Files copied to build/bin directory"
+	}
+}
+
+tasks.named('copyToBin') {
+	dependsOn 'build', 'getDeps'
 }
