@@ -40,18 +40,23 @@ public class StructurizrAdapter {
         _apiConnection = apiConnection;
     }
 
+    /**
+     * Pull workspaces from the API, clearing any existing workspace data first
+     */
     public void PullWorkspaces() throws StructurizrClientException {
+        // Clear existing data
+        _workspacesByName.clear();
+        _catalogWorkspacesByName.clear();
+        _workspaceMetadataByName.clear();
+        
+        // Pull new data
         List<WorkspaceMetadata> workspaceMetadata = createAdminApiClient().getWorkspaces();
         for (WorkspaceMetadata metadata : workspaceMetadata) {
-            if (!_workspaceMetadataByName.containsKey(metadata.getName())) {
-                _workspaceMetadataByName.put(metadata.getName(), metadata);
-            }
+            _workspaceMetadataByName.put(metadata.getName(), metadata);
             WorkspaceApiClient apiClient = createWorkspaceApiClient(metadata);
             apiClient.setMergeFromRemote(true);
             Workspace workspace = apiClient.getWorkspace(metadata.getId());
-            if (!_workspacesByName.containsKey(metadata.getName())) {
-                _workspacesByName.put(metadata.getName(), workspace);
-            }
+            _workspacesByName.put(metadata.getName(), workspace);
         }
     }
 
@@ -79,8 +84,8 @@ public class StructurizrAdapter {
     public Collection<Workspace> GetCatalogWorkspaces() {
         return _catalogWorkspacesByName.values();
     }
-
-    public Workspace CloneToCatalogWorkspace(Workspace workspace) throws StructurizrClientException, Exception {
+    
+    public Workspace RegisterCatalogWorkspace(Workspace workspace) throws StructurizrClientException, Exception {
         WorkspaceMetadata workspaceMetadata = _workspaceMetadataByName.get(workspace.getName());
 
         if (workspaceMetadata == null) {
@@ -89,7 +94,9 @@ public class StructurizrAdapter {
             _workspaceMetadataByName.put(workspace.getName(), workspaceMetadata);
             _workspacesByName.put(workspace.getName(), workspace);
         }
-
+        
+        workspace.setId(workspaceMetadata.getId());
+        
         // Clone to catalog
         Workspace catalogWorkspace = _catalogWorkspacesByName.get(workspace.getName());
         if (catalogWorkspace == null) {
@@ -263,12 +270,12 @@ public class StructurizrAdapter {
         if (catalogSystemLandscapeWorkspace == null) {
             Workspace hostedLandscape = _workspacesByName.get(StructurizrAdapter.LANDSCAPE_WORKSPACE_NAME);
             if (hostedLandscape != null){
-                catalogSystemLandscapeWorkspace = CloneToCatalogWorkspace(hostedLandscape);
+                catalogSystemLandscapeWorkspace = RegisterCatalogWorkspace(hostedLandscape);
             }
             else {
                 catalogSystemLandscapeWorkspace = createShellWorkspace(StructurizrAdapter.LANDSCAPE_WORKSPACE_NAME, "The Trimble Architectural System Landscape", WorkspaceScope.Landscape);
+                isDirty = true;
             }
-            isDirty = true;
         }
 
         SoftwareSystem softwareSystem = workspace.getModel().getSoftwareSystemWithName(workspace.getName());
@@ -319,7 +326,7 @@ public class StructurizrAdapter {
         return new AdminApiClient(_apiConnection.url + "/api", null, _apiConnection.apiKeyPlainText);
     }
 
-    public WorkspaceApiClient createWorkspaceApiClient(WorkspaceMetadata workspaceMetadata) {
+    private WorkspaceApiClient createWorkspaceApiClient(WorkspaceMetadata workspaceMetadata) {
         WorkspaceApiClient workspaceApiClient = new WorkspaceApiClient(_apiConnection.url + "/api", workspaceMetadata.getApiKey(), workspaceMetadata.getApiSecret());
         workspaceApiClient.setWorkspaceArchiveLocation(null); // this prevents the local file system from being cluttered with JSON files
 
@@ -399,5 +406,30 @@ public class StructurizrAdapter {
             return true;
         }
         return false;
+    }
+
+    /**
+     * Clears all workspaces from internal collections
+     */
+    public void clear() {
+        _workspacesByName.clear();
+        _catalogWorkspacesByName.clear();
+    }
+
+    /**
+     * Adds a workspace to the catalog workspaces
+     * Uses the workspace name as the system name
+     * @param workspace The workspace to add
+     */
+    public void addCatalogWorkspace(Workspace workspace) {
+        _catalogWorkspacesByName.put(workspace.getName(), workspace);
+    }
+    
+    /**
+     * Gets a list of all catalog workspace names
+     * @return List of system names
+     */
+    public List<String> getCatalogSystemNames() {
+        return new ArrayList<>(_catalogWorkspacesByName.keySet());
     }
 }

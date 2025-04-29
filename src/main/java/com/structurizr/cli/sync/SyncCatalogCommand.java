@@ -2,6 +2,7 @@ package com.structurizr.cli.sync;
 
 import com.structurizr.Workspace;
 import com.structurizr.api.StructurizrClientException;
+import com.structurizr.api.WorkspaceMetadata;
 import com.structurizr.cli.AbstractCommand;
 import com.structurizr.cli.sync.backstage.BackstageAdapter;
 import com.structurizr.cli.sync.backstage.Entity;
@@ -95,34 +96,41 @@ public class SyncCatalogCommand extends AbstractCommand {
 
         apiConnection = new ApiConnection(url, key);
 
+        // Initialize adapter and pull workspaces for ID matching
         StructurizrAdapter structurizrAdapter = new StructurizrAdapter(apiConnection);
         BackstageAdapter backstage = new BackstageAdapter();
 
-        log.info("Pulling workspaces from " + url);
+        // Pull workspaces to get IDs (adapter will clear internal state first)
+        log.info("Pulling workspaces from " + url + " (for ID matching)");
         structurizrAdapter.PullWorkspaces();
 
-        // Load entities from source
         Entity[] entities = loadEntities(catalogLocation, backstage);
-        
-        // Determine catalog file for YAML updates (null for non-YAML inputs)
+
         File catalogFile = (inputType == InputType.YAML) ? new File(catalogLocation) : null;
-        
-        // Process system entities (matching/creating workspaces)
-        processSystemEntities(entities, structurizrAdapter, catalogFile, inputType);
-        
-        // Process component entities and build relationships
+
+        List<Entity> systems = Arrays.stream(entities)
+                .filter(e -> BackstageAdapter.BACKSTAGE_ENTITY_KIND_SYSTEM.equals(e.kind))
+                .toList();
+
+        for (Entity systemEntity : systems) {
+            Integer workspaceId = createCatalogSystem(systemEntity, structurizrAdapter);
+
+            if (inputType == InputType.YAML) {
+                updateWorkspaceIdInCatalog(systemEntity, String.valueOf(workspaceId), catalogFile);
+            }
+        }
+
         processComponentEntities(entities, structurizrAdapter);
         buildRelationships(entities, structurizrAdapter);
-        
-        // Configure views and add workspaces to landscape
-        configureViews(structurizrAdapter);
+
+        configureViewsAndLandscape(structurizrAdapter);
         
         // Save workspaces locally
-        for (String systemName : structurizrAdapter._catalogWorkspacesByName.keySet()) {
+        for (String systemName : structurizrAdapter.getCatalogSystemNames()) {
             Path systemDir = archWorkspacesDir.resolve(systemName);
             Files.createDirectories(systemDir);
             structurizrAdapter.SaveWorkspaceLocal(systemName, systemDir.toString());
-            log.info("Saved workspace for system " + systemName + " to " + systemDir);
+            log.info("Saved catalog workspace for system " + systemName + " to " + systemDir);
         }
     }
 
@@ -179,114 +187,64 @@ public class SyncCatalogCommand extends AbstractCommand {
         log.info("Loaded " + entities.length + " entities from " + catalogLocation);
         return entities;
     }
-
-    /**
-     * Processes system entities by matching them to existing workspaces or creating new ones
-     */
-    private void processSystemEntities(Entity[] entities, StructurizrAdapter structurizrAdapter, 
-                                      File catalogFile, InputType inputType) 
-            throws Exception {
-        
-        List<Entity> systems = Arrays.stream(entities)
-                .filter(e -> BackstageAdapter.BACKSTAGE_ENTITY_KIND_SYSTEM.equals(e.kind))
-                .collect(Collectors.toList());
-                
-        log.info("Found " + systems.size() + " system(s) in catalog");
-        
-        for (Entity systemEntity : systems) {
-            processSystem(systemEntity, structurizrAdapter, catalogFile, inputType);
-        }
-    }
     
     /**
-     * Processes a system entity to either find an existing workspace or create a new one
+     * Processes a system entity to create a new workspace with appropriate ID
      */
-    private void processSystem(Entity systemEntity, StructurizrAdapter structurizrAdapter, 
-                              File catalogFile, InputType inputType) throws Exception {
+    private Integer createCatalogSystem(Entity systemEntity, StructurizrAdapter structurizrAdapter) throws Exception {
         String systemName = systemEntity.metadata.name;
         log.info("Processing system: " + systemName);
 
         // Check if system already has a workspace ID annotation
-        String workspaceId = null;
+        String workspaceIdFromAnnotation = null;
         if (systemEntity.metadata.annotations != null && 
             systemEntity.metadata.annotations.containsKey(WORKSPACE_ID_ANNOTATION)) {
-            workspaceId = systemEntity.metadata.annotations.get(WORKSPACE_ID_ANNOTATION);
-            log.info("System has workspace ID: " + workspaceId);
+            workspaceIdFromAnnotation = systemEntity.metadata.annotations.get(WORKSPACE_ID_ANNOTATION);
+            log.info("System has workspace ID in annotation: " + workspaceIdFromAnnotation);
         }
 
-        Workspace workspace = null;
+        Integer workspaceId = null;
+        String idSource = "";
 
-        // Search for existing workspace by name first (prioritizing name match)
-        workspace = structurizrAdapter.GetWorkspace(systemName);
-        if (workspace != null) {
-            log.info("Found workspace by name: " + workspace.getName());
-            
-            // If we found a workspace by name but the ID differs from what's in the catalog,
-            // we need to update the catalog-info.yaml with the correct ID
-            String newWorkspaceId = String.valueOf(workspace.getId());
-            if (!newWorkspaceId.equals(workspaceId) && inputType == InputType.YAML) {
-                log.info("Updating workspace ID in catalog file from " + 
-                         (workspaceId != null ? workspaceId : "none") + " to " + newWorkspaceId);
-                updateWorkspaceIdInCatalog(systemEntity, newWorkspaceId, catalogFile);
+        if (workspaceIdFromAnnotation != null && !workspaceIdFromAnnotation.isEmpty()) {
+            try {
+                workspaceId = Integer.parseInt(workspaceIdFromAnnotation);
+                idSource = "annotation";
+            } catch (NumberFormatException e) {
+                log.warn("Invalid workspace ID in annotation: " + workspaceIdFromAnnotation);
             }
         }
-        
-        // If not found by name, try to find by ID if we have one
-        if (workspace == null && workspaceId != null && !workspaceId.isEmpty()) {
-            workspace = structurizrAdapter.GetWorkspaceById(workspaceId);
+        if (workspaceId == null) {
+            Workspace workspace = structurizrAdapter.GetWorkspace(systemName);
             if (workspace != null) {
-                log.info("Found existing workspace by ID: " + workspace.getName());
-                
-                // If the workspace exists but has a different name, we'll keep using it
-                // but log a warning about the name mismatch
-                if (!workspace.getName().equalsIgnoreCase(systemName)) {
-                    log.info("Note: Workspace name '" + workspace.getName() + 
-                            "' differs from system name '" + systemName + "'");
-                }
+                workspaceId = (int) workspace.getId();
             }
         }
-
-        // If still no workspace, create a new one
-        if (workspace == null) {
-            String description = systemEntity.metadata.description != null ? 
-                systemEntity.metadata.description : systemName + " System";
-            
-            workspace = structurizrAdapter.createShellWorkspace(systemName, description, WorkspaceScope.SoftwareSystem);
-            
-            // Add any tags from catalog entity to the software system
-            if (systemEntity.metadata.tags != null && !systemEntity.metadata.tags.isEmpty()) {
-                SoftwareSystem softwareSystem = workspace.getModel().getSoftwareSystemWithName(systemName);
-                if (softwareSystem != null) {
-                    softwareSystem.addTags(systemEntity.metadata.tags.toArray(new String[0]));
-                    
-                    // Add backstage reference property
-                    softwareSystem.addProperty(BackstageAdapter.BACKSTAGE_REF_PROPERTY_NAME, 
-                                             "system:" + systemEntity.metadata.namespace + "/" + systemName);
-                    
-                    // Add DSL identifier for templating
-                    softwareSystem.addProperty(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME, 
-                                              systemEntity.metadata.name.replaceAll("\\W", ""));
-                }
-            }
-            
-            log.info("Created new workspace for system: " + systemName);
-            
-            // Update the catalog-info.yaml with the new workspace ID if using YAML input
-            if (inputType == InputType.YAML) {
-                updateWorkspaceIdInCatalog(systemEntity, String.valueOf(workspace.getId()), catalogFile);
-            }
-        }
-
-        // Clone the workspace to catalog workspace
-        workspace = structurizrAdapter.CloneToCatalogWorkspace(workspace);
         
-        // Apply any tags from catalog entity
-        SoftwareSystem softwareSystem = workspace.getModel().getSoftwareSystemWithName(systemName);
-        if (softwareSystem != null && systemEntity.metadata.tags != null) {
-            Set<String> existingTags = softwareSystem.getTagsAsSet();
-            existingTags.addAll(systemEntity.metadata.tags);
-            softwareSystem.addTags(existingTags.toArray(new String[0]));
+        String description = systemEntity.metadata.description != null ? 
+            systemEntity.metadata.description : systemName + " System";
+        
+        // Create a new catalog workspace
+        Workspace shellWorkspace = structurizrAdapter.createShellWorkspace(systemName, description, WorkspaceScope.SoftwareSystem);
+        Workspace catalogWorkspace = structurizrAdapter.RegisterCatalogWorkspace(shellWorkspace);
+
+        SoftwareSystem softwareSystem = catalogWorkspace.getModel().getSoftwareSystemWithName(systemName);
+        if (softwareSystem != null) {
+            if (systemEntity.metadata.tags != null && !systemEntity.metadata.tags.isEmpty()) {
+                softwareSystem.addTags(systemEntity.metadata.tags.toArray(new String[0]));
+            }
+
+            softwareSystem.addProperty(BackstageAdapter.BACKSTAGE_REF_PROPERTY_NAME, 
+                                     "system:" + systemEntity.metadata.namespace + "/" + systemName);
+
+            softwareSystem.addProperty(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME, 
+                                      systemEntity.metadata.name.replaceAll("\\W", ""));
         }
+
+        log.info("Created catalog workspace for system: " + systemName +
+                (workspaceId != null ? " with ID " + workspaceId + " (from " + idSource + ")" : ""));
+
+        return workspaceId;
     }
     
     /**
@@ -415,14 +373,10 @@ public class SyncCatalogCommand extends AbstractCommand {
                             container.setDescription(entity.metadata.description);
                             container.addProperty(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME, dslIdentifier);
                             container.addProperty(BackstageAdapter.BACKSTAGE_REF_PROPERTY_NAME, entity.toBackstageRef());
-                            container.addTags(new String[0]);
-                        }
-                        if (entity.metadata.tags != null) {
-                            Set<String> existingTags = container.getTagsAsSet();
-                            // New tags?
-                            if (existingTags.addAll(entity.metadata.tags)) {
-                                container.addTags(existingTags.toArray(new String[0]));
-                                catalogWorkspace.setLastModifiedDate(new Date());
+                            
+                            // Add tags if available
+                            if (entity.metadata.tags != null && !entity.metadata.tags.isEmpty()) {
+                                container.addTags(entity.metadata.tags.toArray(new String[0]));
                             }
                         }
                     }
@@ -439,6 +393,11 @@ public class SyncCatalogCommand extends AbstractCommand {
      */
     private void buildRelationships(Entity[] entities, StructurizrAdapter structurizrAdapter) {
         for (Workspace workspace : structurizrAdapter.GetCatalogWorkspaces()) {
+            // Skip the landscape workspace for relationship processing
+            if (workspace.getName().equals(StructurizrAdapter.LANDSCAPE_WORKSPACE_NAME)) {
+                continue;
+            }
+            
             //gets set if a new relationship is created
             Relationship relationship = null;
 
@@ -503,30 +462,36 @@ public class SyncCatalogCommand extends AbstractCommand {
     }
     
     /**
-     * Configure views and themes for software system workspaces and add them to the landscape
+     * Configure views for software system workspaces and add them to the landscape
      */
-    private void configureViews(StructurizrAdapter structurizrAdapter) {
-        List<Workspace> systems = structurizrAdapter.GetCatalogWorkspaces().stream()
-            .filter(w -> w.getConfiguration().getScope() == WorkspaceScope.SoftwareSystem)
-            .collect(Collectors.toList());
-            
-        for (Workspace workspace : systems) {
-            SoftwareSystem softwareSystem = workspace.getModel().getSoftwareSystemWithName(workspace.getName());
+    private void configureViewsAndLandscape(StructurizrAdapter structurizrAdapter) {
+        // First configure views for each system workspace
+        List<Workspace> systemWorkspaces = new ArrayList<>();
+        
+        // Create a stable copy of the collection to prevent concurrent modification
+        for (Workspace workspace : structurizrAdapter.GetCatalogWorkspaces()) {
+            // Skip the landscape workspace
+            if (!workspace.getName().equals(StructurizrAdapter.LANDSCAPE_WORKSPACE_NAME) &&
+                    workspace.getConfiguration().getScope() == WorkspaceScope.SoftwareSystem) {
+                    SoftwareSystem softwareSystem = workspace.getModel().getSoftwareSystemWithName(workspace.getName());
 
-            if (softwareSystem == null) {
-                log.warn("Can't add configure views for workspace " + workspace.getName() + " to without a software system.");
-                continue;
+                    if (softwareSystem == null) {
+                        log.warn("Can't configure views for workspace " + workspace.getName() + " without a software system.");
+                        continue;
+                    }
+
+                    systemWorkspaces.add(workspace);
+                    String[] themes = workspace.getViews().getConfiguration().getThemes();
+                    if (!Arrays.asList(themes).contains("idesignTheme")) {
+                        workspace.getViews().getConfiguration().addTheme(StructurizrAdapter.IDESIGN_THEME_URL);
+                    }
             }
+        }
 
-            String[] themes = workspace.getViews().getConfiguration().getThemes();
-            if (!Arrays.asList(themes).contains("idesignTheme")) {
-                workspace.getViews().getConfiguration().addTheme(StructurizrAdapter.IDESIGN_THEME_URL);
-            }
-
-            log.info("Created " + workspace.getName() + " workspace from catalog");
-
+        for (Workspace workspace : systemWorkspaces) {
             try {
                 structurizrAdapter.AddWorkspaceToCatalogLandscape(workspace);
+                log.info("Added " + workspace.getName() + " to landscape");
             } catch (Exception e) {
                 log.error("Failed to add workspace to landscape: " + workspace.getName(), e);
             }
