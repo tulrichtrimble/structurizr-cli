@@ -14,6 +14,8 @@ import com.structurizr.validation.WorkspaceScopeValidatorFactory;
 import com.structurizr.view.SystemLandscapeView;
 
 import java.io.File;
+import java.io.IOException;
+import java.io.InputStream;
 import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -44,8 +46,9 @@ public class StructurizrAdapter {
             if (!_workspaceMetadataByName.containsKey(metadata.getName())) {
                 _workspaceMetadataByName.put(metadata.getName(), metadata);
             }
-
-            Workspace workspace = createWorkspaceApiClient(metadata).getWorkspace(metadata.getId());
+            WorkspaceApiClient apiClient = createWorkspaceApiClient(metadata);
+            apiClient.setMergeFromRemote(true);
+            Workspace workspace = apiClient.getWorkspace(metadata.getId());
             if (!_workspacesByName.containsKey(metadata.getName())) {
                 _workspacesByName.put(metadata.getName(), workspace);
             }
@@ -54,6 +57,15 @@ public class StructurizrAdapter {
 
     public Workspace GetWorkspace(String name) {
         return _workspacesByName.get(name);
+    }
+
+    public Workspace GetWorkspaceById(String id) {
+        for (Workspace existingWorkspace : _workspacesByName.values()) {
+            if (String.valueOf(existingWorkspace.getId()).equals(id)) {
+                return existingWorkspace;
+            }
+        }
+        return null;
     }
 
     public Workspace GetCatalogWorkspace(String name) {
@@ -97,10 +109,33 @@ public class StructurizrAdapter {
         return catalogWorkspace;
     }
 
-    //TODO: Alter this function to do a workspace PUT for every modified workspace
-    // Verify whether LastModifiedDate changes with update to workspace-backstage.json and/or DSL changes
-    public void PushWorkspaces(String baseWorkspacesFilePath) throws Exception, StructurizrClientException {
+    public boolean ContentsAreEqual(Workspace workspace1, Workspace workspace2) throws Exception{
+        Workspace tempWorkspace1 = WorkspaceUtils.fromJson(WorkspaceUtils.toJson(workspace1, false));
+        Workspace tempWorkspace2 = WorkspaceUtils.fromJson(WorkspaceUtils.toJson(workspace2, false));
 
+        tempWorkspace1.setLastModifiedDate(tempWorkspace2.getLastModifiedDate());
+        tempWorkspace1.setLastModifiedAgent("");
+        tempWorkspace1.setLastModifiedUser("");
+        tempWorkspace2.setLastModifiedAgent("");
+        tempWorkspace2.setLastModifiedUser("");
+
+        // Remove all the relationship dsl identifiers.
+        // They appear to dispense random guids that are not updated on push
+        for (Relationship relationship: tempWorkspace1.getModel().getRelationships()){
+            relationship.addProperty(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME, "x");
+        }
+        for (Relationship relationship: tempWorkspace2.getModel().getRelationships()){
+            relationship.addProperty(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME, "x");
+        }
+
+        String workspace1AsString = WorkspaceUtils.toJson(tempWorkspace1, false);
+        String workspace2AsString = WorkspaceUtils.toJson(tempWorkspace2, false);
+
+        return workspace1AsString.equals(workspace2AsString);
+    }
+
+    // Verify whether LastModifiedDate changes with update to workspace-backstage.json and/or DSL changes
+    public void PushWorkspaces(File baseWorkspacesFilePath) throws Exception, StructurizrClientException {
         for (WorkspaceMetadata workspaceMetadata: _workspaceMetadataByName.values()) {
             Workspace hostedWorkspace = _workspacesByName.get(workspaceMetadata.getName());
             String folderPath = baseWorkspacesFilePath + "/" + hostedWorkspace.getName();
@@ -110,17 +145,31 @@ public class StructurizrAdapter {
             if (workspaceDslFile.exists()) {
                 StructurizrDslParser parser = new StructurizrDslParser();
                 parser.parse(workspaceDslFile);
-                Workspace localWorkspace = parser.getWorkspace();
-                WorkspaceScopeValidatorFactory.getValidator(localWorkspace).validate(localWorkspace);
+                Workspace localDslWorkspace = parser.getWorkspace();
+                localDslWorkspace.setLastModifiedDate(new Date());
+                WorkspaceScopeValidatorFactory.getValidator(localDslWorkspace).validate(localDslWorkspace);
 
-                if (localWorkspace.getLastModifiedDate().after(hostedWorkspace.getLastModifiedDate())){
-                    System.out.println("Pushing locally updated [" + workspaceMetadata.getName() + "] to OnPrem.");
-                    WorkspaceApiClient workspaceApiClient = createWorkspaceApiClient(workspaceMetadata);
-                    workspaceApiClient.setMergeFromRemote(false);
-                    workspaceApiClient.putWorkspace(workspaceMetadata.getId(), localWorkspace);
+                //Ensure a workspace.json file exists as parsed from DSL
+                File localJsonWorkspaceFile = new File(path.toFile(), "workspace.json");
+                Workspace localJsonWorkspace;
+                if (localJsonWorkspaceFile.exists()){
+                    localJsonWorkspace = WorkspaceUtils.loadWorkspaceFromJson(localJsonWorkspaceFile);
                 }
                 else{
-                    System.out.println("OnPrem [" + workspaceMetadata.getName() + "] was updated more recently than local.");
+                    WorkspaceUtils.saveWorkspaceToJson(localDslWorkspace, localJsonWorkspaceFile);
+                    localJsonWorkspace = localDslWorkspace;
+                }
+
+                localDslWorkspace.getViews().copyLayoutInformationFrom(localJsonWorkspace.getViews());
+
+                if (!ContentsAreEqual(localDslWorkspace, hostedWorkspace)){
+                    System.out.println("Workspace [" + workspaceMetadata.getName() + "] differs from the hosted version. Pushing to OnPrem.");
+                    WorkspaceApiClient workspaceApiClient = createWorkspaceApiClient(workspaceMetadata);
+                    workspaceApiClient.setMergeFromRemote(false);
+                    workspaceApiClient.putWorkspace(workspaceMetadata.getId(), localDslWorkspace);
+                }
+                else{
+                    System.out.println("OnPrem and local [" + workspaceMetadata.getName() + "] do not differ and will not be pushed OnPrem.");
                 }
             }
             else {
@@ -129,56 +178,81 @@ public class StructurizrAdapter {
         }
     }
 
-    public void SaveWorkspacesLocal(String baseWorkspacesFilePath, URI hostedStruturizerApi, String dslTemplatePath) throws Exception, StructurizrClientException {
+    /**
+     * Saves all workspaces locally with template-based DSL files to separate subdirectories
+     * 
+     * @param baseWorkspacesFilePath Base path where workspace subdirectories will be created
+     * @throws Exception If an error occurs during saving
+     * @throws StructurizrClientException If a Structurizr API error occurs
+     */
+    public void SaveWorkspacesLocal(String baseWorkspacesFilePath) throws Exception, StructurizrClientException {
         for (Workspace workspace: _workspacesByName.values()) {
             String folderPath = baseWorkspacesFilePath + "/" + workspace.getName();
             Path path = Path.of(folderPath);
             Files.createDirectories(path);
             System.out.println("Updating local workspace:" + path);
 
-            String landscapeDslTemplate = new String(Files.readAllBytes(Paths.get(dslTemplatePath + "TokenizedLandscapeWorkspace.dsl")));
-            String systemDslTemplate = new String(Files.readAllBytes(Paths.get(dslTemplatePath + "TokenizedSystemWorkspace.dsl")));
+            SaveWorkspaceLocal(workspace.getName(), path.toString());
+        }
+    }
 
-            Workspace catalogWorkspace = _catalogWorkspacesByName.get(workspace.getName());
-            if (catalogWorkspace != null) {
-                File catalogWorkspaceJson = new File(path.toFile(), "catalog-workspace.json");
-                WorkspaceUtils.saveWorkspaceToJson(catalogWorkspace, catalogWorkspaceJson);
+    /**
+     * Saves a single workspace to a specific directory
+     * 
+     * @param workspaceName Name of the workspace to save
+     * @param directoryPath Direct path to the directory where files should be saved (no subdirectories)
+     * @throws Exception If an error occurs during saving
+     * @throws StructurizrClientException If a Structurizr API error occurs
+     */
+    public void SaveWorkspaceLocal(String workspaceName, String directoryPath) throws Exception, StructurizrClientException {
+        // Load templates from classpath resources
+        String landscapeDslTemplate = loadResourceAsString("/TokenizedLandscapeWorkspace.dsl");
+        String systemDslTemplate = loadResourceAsString("/TokenizedSystemWorkspace.dsl");
 
-                // Initialize the workspace DSL
-                File workspaceDslFile = new File(path.toFile(), "workspace.dsl");
-                if (!workspaceDslFile.exists()) {
-                    System.out.println("New DSL file in" + path);
-                    String dslRendered = "";
-                    if (catalogWorkspace.getConfiguration().getScope() == WorkspaceScope.SoftwareSystem) {
-                        String dslIdentifier = catalogWorkspace.getModel().getSoftwareSystemWithName(catalogWorkspace.getName())
-                                .getProperties().get(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME);
-                        dslRendered = systemDslTemplate
-                            .replace("{% workspace_path %}", "catalog-workspace.json")
-                            .replace("{% system_dsl_name %}", dslIdentifier);
-                    }
-                    else {
-                        dslRendered = landscapeDslTemplate
-                            .replace("{% workspace_path %}", "catalog-workspace.json");
-                    }
+        Workspace catalogWorkspace = _catalogWorkspacesByName.get(workspaceName);
+        if (catalogWorkspace != null) {
+            Path path = Path.of(directoryPath);
+            File catalogWorkspaceJson = new File(path.toFile(), "catalog-workspace.json");
+            WorkspaceUtils.saveWorkspaceToJson(catalogWorkspace, catalogWorkspaceJson);
 
-                    Files.writeString(
-                        workspaceDslFile.toPath(),
-                        dslRendered,
-                        java.nio.file.StandardOpenOption.CREATE,
-                        java.nio.file.StandardOpenOption.TRUNCATE_EXISTING);
+            // Initialize the workspace DSL
+            File workspaceDslFile = new File(path.toFile(), "workspace.dsl");
+            if (!workspaceDslFile.exists()) {
+                System.out.println("New DSL file in " + path);
+                String dslRendered = "";
+                if (catalogWorkspace.getConfiguration().getScope() == WorkspaceScope.SoftwareSystem) {
+                    String dslIdentifier = catalogWorkspace.getModel().getSoftwareSystemWithName(catalogWorkspace.getName())
+                            .getProperties().get(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME);
+                    dslRendered = systemDslTemplate
+                        .replace("{% workspace_path %}", "catalog-workspace.json")
+                        .replace("{% system_dsl_name %}", dslIdentifier);
                 }
-            }
+                else {
+                    dslRendered = landscapeDslTemplate
+                        .replace("{% workspace_path %}", "catalog-workspace.json");
+                }
 
-            WorkspaceMetadata workspaceMetadata = _workspaceMetadataByName.get(workspace.getName());
-            File workspaceHostPut = new File(path.toFile(), "structurizr-put.ps1");
-
-            /*
-            --removed since replaced by Sync Catalog
-            Files.writeString(
-                    workspaceHostPut.toPath(),
-                    "structurizr push -id "+ workspace.getId() +" -url "+ hostedStruturizerApi +"/api -key "+workspaceMetadata.getApiKey()+" -secret "+ workspaceMetadata.getApiSecret() +" -workspace workspace.json",
+                Files.writeString(
+                    workspaceDslFile.toPath(),
+                    dslRendered,
                     java.nio.file.StandardOpenOption.CREATE,
-                    java.nio.file.StandardOpenOption.TRUNCATE_EXISTING);*/
+                    java.nio.file.StandardOpenOption.TRUNCATE_EXISTING);
+            }
+        }
+    }
+
+    /**
+     * Load a resource file from the classpath as a string
+     * @param resourcePath Path to the resource (should start with a slash)
+     * @return Content of the resource as string
+     * @throws IOException If the resource cannot be read
+     */
+    private String loadResourceAsString(String resourcePath) throws IOException {
+        try (InputStream is = StructurizrAdapter.class.getResourceAsStream(resourcePath)) {
+            if (is == null) {
+                throw new IOException("Resource not found: " + resourcePath);
+            }
+            return new String(is.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8);
         }
     }
 

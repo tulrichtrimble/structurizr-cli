@@ -1,6 +1,7 @@
 package com.structurizr.cli;
 
 import com.structurizr.cli.export.ExportCommand;
+import com.structurizr.cli.sync.InitCatalogCommand;
 import com.structurizr.cli.sync.SyncCatalogCommand;
 import com.structurizr.cli.sync.SyncOnPremCommand;
 import com.structurizr.util.StringUtils;
@@ -19,6 +20,7 @@ public class StructurizrCliApplication {
 
 	private static final Log log;
 
+	private static final String INIT_COMMAND = "init";
 	private static final String PULL_CATALOG_COMMAND = "pull-catalog";
 	private static final String PUSH_ONPREM_COMMAND = "push-onprem";
 	private static final String PUSH_COMMAND = "push";
@@ -62,6 +64,7 @@ public class StructurizrCliApplication {
 
 		log = LogFactory.getLog(StructurizrCliApplication.class);
 
+		COMMANDS.put(INIT_COMMAND, new InitCatalogCommand());
 		COMMANDS.put(PULL_CATALOG_COMMAND, new SyncCatalogCommand());
 		COMMANDS.put(PUSH_ONPREM_COMMAND, new SyncOnPremCommand());
 		COMMANDS.put(PUSH_COMMAND, new PushCommand());

@@ -1,6 +1,7 @@
 package com.structurizr.cli.sync.backstage;
 
 import java.util.Collection;
+import java.util.Map;
 
 public class EntityMetadata {
 
@@ -8,5 +9,6 @@ public class EntityMetadata {
     public String name;
     public String description;
     public Collection<? extends String> tags;
+    public Map<String, String> annotations;
 
 }

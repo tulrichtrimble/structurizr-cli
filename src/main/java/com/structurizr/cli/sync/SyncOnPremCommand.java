@@ -13,6 +13,9 @@ import org.apache.commons.cli.*;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
 
+import java.io.File;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Date;
 import java.util.Set;
@@ -25,7 +28,7 @@ public class SyncOnPremCommand extends AbstractCommand {
     public void run(String... args) throws Exception , StructurizrClientException {
         Options options = new Options();
 
-        Option option = new Option("url", "structurizrApiUrl", true, "The URL of the On Premesis instance to use for workspace identifiers and publishing");
+        Option option = new Option("url", "structurizrApiUrl", true, "The URL of the On Premises instance to use for workspace identifiers and publishing");
         option.setRequired(true);
         options.addOption(option);
 
@@ -33,20 +36,19 @@ public class SyncOnPremCommand extends AbstractCommand {
         option.setRequired(true);
         options.addOption(option);
 
-        option = new Option("workspaces", "workspaces", true, "Folder to store named workspaces");
+        option = new Option("workspaces", "workspaces", true, "Folder where named workspaces are stored");
         option.setRequired(false);
         options.addOption(option);
 
         CommandLineParser commandLineParser = new DefaultParser();
         HelpFormatter formatter = new HelpFormatter();
 
-        ApiConnection apiConnection = null;
-
-        String url = "";
-        String key = "";
-        String workspaceRoot = "";
-
         try{
+            ApiConnection apiConnection = null;
+            String url = "";
+            String key = "";
+            String workspaceRoot = "";
+
             CommandLine cmd = commandLineParser.parse(options, args);
             url = cmd.getOptionValue("structurizrApiUrl", "https://arch-repo-fahxgzhxbqgbdmgt.centralus-01.azurewebsites.net");
             key = cmd.getOptionValue("apiKey", "TYLER_API_KEY");
@@ -54,6 +56,20 @@ public class SyncOnPremCommand extends AbstractCommand {
                     "workspaces",
                     System.getProperty("user.dir") + "\\..\\named-workspaces");
 
+            File workspaceRootFolder = new File(workspaceRoot);
+            if (workspaceRootFolder.exists() && workspaceRootFolder.isDirectory()){
+                System.out.println("Loading local named workspaces from " + workspaceRoot);
+            }
+            else {
+                System.out.println("The workspace path " + workspaceRoot + " is invalid. Specify the --workspaces argument or run the command from the /structurizr/cli folder.");
+                return;
+            }
+
+            apiConnection = new ApiConnection(url, key);
+            StructurizrAdapter structurizrAdapter = new StructurizrAdapter(apiConnection);
+            structurizrAdapter.PullWorkspaces();
+            structurizrAdapter.PushWorkspaces(workspaceRootFolder);
+            log.info("Pushing updated workspaces to OnPrem " + url);
         }
         catch (ParseException e) {
             log.error(e.getMessage());
@@ -61,13 +77,5 @@ public class SyncOnPremCommand extends AbstractCommand {
 
             System.exit(1);
         }
-
-        apiConnection = new ApiConnection(url, key);
-        StructurizrAdapter structurizrAdapter = new StructurizrAdapter(apiConnection);
-        structurizrAdapter.PullWorkspaces();
-        structurizrAdapter.PushWorkspaces(workspaceRoot);
-
-        log.info("Pushing updaated workspaces to OnPrem " + url);
-
     }
 }
