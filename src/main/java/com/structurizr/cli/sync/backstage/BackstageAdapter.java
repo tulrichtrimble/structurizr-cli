@@ -29,9 +29,12 @@ public class BackstageAdapter {
     public static final String BACKSTAGE_ENTITY_KIND_SYSTEM = "System";
     public static final String BACKSTAGE_ENTITY_KIND_COMPONENT = "Component";
     public static final String BACKSTAGE_ENTITY_KIND_RESOURCE = "Resource";
+    // YAML just defined PartOf
     public static final String BACKSTAGE_RELATION_TYPE_HAS_PART = "hasPart";
+    public static final String BACKSTAGE_RELATION_TYPE_PART_OF = "partOf";
     public static final String BACKSTAGE_RELATION_TYPE_DEPENDS_ON = "dependsOn";
     public static final String BACKSTAGE_RELATION_TYPE_CONSUMES_API = "consumesApi";
+    public static final String BACKSTAGE_RELATION_TYPE_OWNED_BY = "ownedBy";
     public static final String BACKSTAGE_REF_PROPERTY_NAME = "backstage.ref";
     public static final String BACKSTAGE_SYSTEM_NAME = "backstage-system";
 
@@ -124,68 +127,75 @@ public class BackstageAdapter {
         for (String document : documents) {
             if (!document.trim().isEmpty()) {
                 Entity entity = yamlMapper.readValue(document.trim(), Entity.class);
-                
-                // Ensure metadata.namespace is set if not in YAML
+
                 if (entity.metadata != null && entity.metadata.namespace == null) {
                     entity.metadata.namespace = "default";
                 }
-                
-                // Build relations array from spec properties if missing
-                if ((entity.relations == null || entity.relations.length == 0) && entity.spec != null) {
-                    List<Relation> relations = new ArrayList<>();
-                    
+
+                if (entity.spec != null) {
                     // Add owner relation
                     if (entity.spec.owner != null) {
-                        addRelationFromRef(relations, "ownedBy", entity.spec.owner);
+                        entity.relations.add(createRelation("owner", "default", entity.spec.owner));
                     }
-                    
-                    // Add domain relation
+
                     if (entity.spec.domain != null) {
-                        addRelationFromRef(relations, "partOf", entity.spec.domain);
+                        entity.relations.add(createRelation("domain", "default", entity.spec.domain));
                     }
-                    
-                    // Add system relation
+
                     if (entity.spec.system != null) {
-                        addRelationFromRef(relations, "partOf", entity.spec.system);
+                        entity.relations.add(createRelation("system", "default", entity.spec.system));
                     }
-                    
-                    // Add subdomainOf relation
+
                     if (entity.spec.subdomainOf != null) {
-                        addRelationFromRef(relations, "partOf", entity.spec.subdomainOf);
-                    }
-                    
-                    // Set relations array
-                    if (!relations.isEmpty()) {
-                        entity.relations = relations.toArray(new Relation[0]);
+                        entity.relations.add(createRelation("subdomain", "namespace", entity.spec.subdomainOf));
                     }
                 }
-                
+
                 entities.add(entity);
             }
         }
-        
+
         return entities.toArray(new Entity[0]);
     }
 
-    private void addRelationFromRef(List<Relation> relations, String relationType, String ref) {
-        String targetRef = ref;
-        
-        // If the ref doesn't include the entity type prefix, infer it based on relation type
-        if (!ref.contains(":")) {
-            if (relationType.equals("ownedBy")) {
-                targetRef = "group:default/" + ref;
-            } else if (relationType.equals("partOf") && ref.equals("system")) {
-                targetRef = "system:default/" + ref;
-            } else if (relationType.equals("partOf") && ref.equals("domain")) {
-                targetRef = "domain:default/" + ref;
-            }
+    private Relation createRelation(String specKind, String namespace, String targetName) {
+        String relationType = null;
+
+        RelationTarget relationTarget = new RelationTarget();
+        relationTarget.namespace = namespace;
+
+        //Hard code from values first
+        if (specKind.toLowerCase().equals("owner")) {
+            relationTarget.kind = "group";
+            relationType = BACKSTAGE_RELATION_TYPE_OWNED_BY;
         }
-        
+        else if (specKind.toLowerCase().equals("system")) {
+            relationTarget.kind = "system";
+            relationType = BACKSTAGE_RELATION_TYPE_PART_OF;
+        }
+        else if (specKind.toLowerCase().equals("domain")) {
+            relationTarget.kind = "domain";
+            relationType = BACKSTAGE_RELATION_TYPE_PART_OF;
+        }
+        else if (specKind.toLowerCase().equals("subdomain")) {
+            relationTarget.kind = "domain";
+            relationType = BACKSTAGE_RELATION_TYPE_PART_OF;
+        }
+
+        // Override if TargetRef is provided
+        if (targetName.contains(":")){
+            relationTarget.kind = specKind;
+            relationTarget = Relation.parseTargetRef(targetName);
+        }
+        else
+        {
+            relationTarget.name = targetName;
+        }
+
         Relation relation = new Relation();
         relation.type = relationType;
-        relation.targetRef = targetRef;
-        
-        relations.add(relation);
+        relation.target = relationTarget;
+        return relation;
     }
 
     protected String toBackstageRef(Entity entity) {

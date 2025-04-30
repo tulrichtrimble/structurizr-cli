@@ -408,7 +408,7 @@ public class SyncCatalogCommand extends AbstractCommand {
                         if (BackstageAdapter.BACKSTAGE_RELATION_TYPE_DEPENDS_ON.equals(relation.type) || 
                             BackstageAdapter.BACKSTAGE_RELATION_TYPE_CONSUMES_API.equals(relation.type)) {
                             String sourceRef = entity.toBackstageRef();
-                            String targetRef = relation.targetRef;
+                            String targetRef = relation.targetRef();
                             Container source = (Container) workspace.getModel().getElements().stream()
                                 .filter(e -> e instanceof Container && sourceRef.equals(e.getProperties().get(BackstageAdapter.BACKSTAGE_REF_PROPERTY_NAME)))
                                 .findFirst().orElse(null);
@@ -435,7 +435,7 @@ public class SyncCatalogCommand extends AbstractCommand {
                         if (BackstageAdapter.BACKSTAGE_RELATION_TYPE_DEPENDS_ON.equals(relation.type) || 
                             BackstageAdapter.BACKSTAGE_RELATION_TYPE_CONSUMES_API.equals(relation.type)) {
                             String sourceRef = entity.toBackstageRef();
-                            String targetRef = relation.targetRef;
+                            String targetRef = relation.targetRef();
                             log.debug(sourceRef + " -> " + targetRef);
                             SoftwareSystem source = (SoftwareSystem) workspace.getModel().getElements().stream()
                                 .filter(e -> e instanceof SoftwareSystem && sourceRef.equals(e.getProperties().get(BackstageAdapter.BACKSTAGE_REF_PROPERTY_NAME)))
