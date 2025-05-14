@@ -24,13 +24,12 @@ import java.util.regex.Pattern;
 
 public class BackstageAdapter {
 
-    public static final String LANDSCAPE_WORKSPACE_NAME = "Landscape";
     public static final String BACKSTAGE_ENTITY_KIND_DOMAIN = "Domain";
     public static final String BACKSTAGE_ENTITY_KIND_SYSTEM = "System";
     public static final String BACKSTAGE_ENTITY_KIND_COMPONENT = "Component";
     public static final String BACKSTAGE_ENTITY_KIND_RESOURCE = "Resource";
     // YAML just defined PartOf
-    public static final String BACKSTAGE_RELATION_TYPE_HAS_PART = "hasPart";
+    public static final String BACKSTAGE_RELATION_TYPE_SUB_COMPONENT_OF = "subComponentOf";
     public static final String BACKSTAGE_RELATION_TYPE_PART_OF = "partOf";
     public static final String BACKSTAGE_RELATION_TYPE_DEPENDS_ON = "dependsOn";
     public static final String BACKSTAGE_RELATION_TYPE_CONSUMES_API = "consumesApi";
@@ -88,14 +87,21 @@ public class BackstageAdapter {
         }
 
         boolean isYaml = isYamlContent(content) || 
-                         (location.toLowerCase().endsWith(".yaml") || 
-                          location.toLowerCase().endsWith(".yml"));
+                         (location.toLowerCase().endsWith(".yaml") ||
+                                 location.toLowerCase().endsWith(".yml"));
 
+        Entity[] entities;
         if (isYaml) {
-            return parseYamlEntities(content);
+            entities = parseYamlEntities(content);
         } else {
-            return parseJsonEntities(content);
+            entities = parseJsonEntities(content);
         }
+
+        if (entities == null || entities.length == 0) {
+            throw new IllegalArgumentException("No entities found in catalog source: " + location);
+        }
+
+        return entities;
     }
 
     private boolean isYamlContent(String content) {
@@ -131,23 +137,32 @@ public class BackstageAdapter {
                 if (entity.metadata != null && entity.metadata.namespace == null) {
                     entity.metadata.namespace = "default";
                 }
-
                 if (entity.spec != null) {
                     // Add owner relation
                     if (entity.spec.owner != null) {
                         entity.relations.add(createRelation("owner", "default", entity.spec.owner));
                     }
-
                     if (entity.spec.domain != null) {
                         entity.relations.add(createRelation("domain", "default", entity.spec.domain));
                     }
-
                     if (entity.spec.system != null) {
                         entity.relations.add(createRelation("system", "default", entity.spec.system));
                     }
-
                     if (entity.spec.subdomainOf != null) {
-                        entity.relations.add(createRelation("subdomain", "namespace", entity.spec.subdomainOf));
+                        entity.relations.add(createRelation("subdomainOf", "default", entity.spec.subdomainOf));
+                    }
+                    if (entity.spec.consumesApis != null) {
+                        for (String api : entity.spec.consumesApis) {
+                            entity.relations.add(createRelation("consumesApi", "default", api));
+                        }
+                    }
+                    if (entity.spec.dependsOn != null) {
+                        for (String dependsOn : entity.spec.dependsOn) {
+                            entity.relations.add(createRelation("dependsOn", "default", dependsOn));
+                        }
+                    }
+                    if (entity.spec.subcomponentOf != null) {
+                        entity.relations.add(createRelation("subcomponentOf", "default", entity.spec.subcomponentOf));
                     }
                 }
 
@@ -177,10 +192,24 @@ public class BackstageAdapter {
             relationTarget.kind = "domain";
             relationType = BACKSTAGE_RELATION_TYPE_PART_OF;
         }
-        else if (specKind.toLowerCase().equals("subdomain")) {
+        else if (specKind.equals("subdomainOf")) {
             relationTarget.kind = "domain";
             relationType = BACKSTAGE_RELATION_TYPE_PART_OF;
         }
+        else if (specKind.equals("dependsOn")) {
+            relationTarget.kind = "component";
+            relationType = BACKSTAGE_RELATION_TYPE_DEPENDS_ON;
+        }
+        else if (specKind.equals("consumesApi")) {
+            relationTarget.kind = "component";
+            relationType = BACKSTAGE_RELATION_TYPE_CONSUMES_API;
+        }
+        else if (specKind.equals("subcomponentOf")) {
+            relationTarget.kind = "component";
+            relationType = BACKSTAGE_RELATION_TYPE_CONSUMES_API;
+        }
+
+        //TODO: Unsupported relations might fall through the cracks.
 
         // Override if TargetRef is provided
         if (targetName.contains(":")){
@@ -195,6 +224,7 @@ public class BackstageAdapter {
         Relation relation = new Relation();
         relation.type = relationType;
         relation.target = relationTarget;
+
         return relation;
     }
 

@@ -12,6 +12,10 @@ workspace extends {% workspace_path %} {
         //!element "SoftwareSystem://Software System 1" {
         //     webapp2 = container "Web Application 2"
         // }
+
+        !element {% system_dsl_name %} {
+{% containers %}
+        }
     }
     
     views {

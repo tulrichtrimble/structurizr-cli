@@ -7,5 +7,9 @@ public class EntitySpec {
     public String system;
     public String type;
     public String subdomainOf;
+    public String[] consumesApis;
+    public String[] dependsOn;
+    public String subcomponentOf;
+    public String lifecycle;
 
 }

@@ -1,13 +1,7 @@
 package com.structurizr.cli.sync;
 
-import com.structurizr.Workspace;
 import com.structurizr.api.StructurizrClientException;
 import com.structurizr.cli.AbstractCommand;
-import com.structurizr.configuration.WorkspaceScope;
-import com.structurizr.model.Container;
-import com.structurizr.model.Element;
-import com.structurizr.model.Relationship;
-import com.structurizr.model.SoftwareSystem;
 import com.structurizr.util.StringUtils;
 import org.apache.commons.cli.*;
 import org.apache.commons.logging.Log;

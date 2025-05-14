@@ -3,7 +3,7 @@ package com.structurizr.cli.sync.backstage;
 public class Relation {
 
     public String type;
-    public String targetRef(){
+    public String toTargetRef(){
         return target.kind.toLowerCase() + ":" + target.namespace + "/" + target.name ;
     }
     public RelationTarget target;

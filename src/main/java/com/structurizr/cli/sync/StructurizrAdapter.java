@@ -5,6 +5,7 @@ import com.structurizr.api.AdminApiClient;
 import com.structurizr.api.StructurizrClientException;
 import com.structurizr.api.WorkspaceApiClient;
 import com.structurizr.api.WorkspaceMetadata;
+import com.structurizr.cli.sync.backstage.BackstageAdapter;
 import com.structurizr.dsl.StructurizrDslParser;
 import com.structurizr.configuration.WorkspaceScope;
 import com.structurizr.model.*;
@@ -16,10 +17,8 @@ import com.structurizr.view.SystemLandscapeView;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.Paths;
 import java.util.*;
 
 public class StructurizrAdapter {
@@ -84,33 +83,52 @@ public class StructurizrAdapter {
     public Collection<Workspace> GetCatalogWorkspaces() {
         return _catalogWorkspacesByName.values();
     }
+
+    public Element GetCatalogElementByRef(String sourceRef){
+        if (StringUtils.isNullOrEmpty(sourceRef)) {
+            return null;
+        }
+        for (Workspace workspace : _catalogWorkspacesByName.values()) {
+            StaticStructureElement element = (StaticStructureElement) workspace.getModel().getElements().stream()
+                    .filter(e -> e instanceof StaticStructureElement &&
+                            sourceRef.equals(e.getProperties().get(BackstageAdapter.BACKSTAGE_REF_PROPERTY_NAME)))
+                    .findFirst().orElse(null);
+
+            if (element != null) {
+                return element;
+            }
+        }
+
+        return null;
+    }
     
-    public Workspace RegisterCatalogWorkspace(Workspace workspace) throws StructurizrClientException, Exception {
-        WorkspaceMetadata workspaceMetadata = _workspaceMetadataByName.get(workspace.getName());
+    public Workspace RegisterCatalogWorkspace(Workspace nonCatalogWorkspace) throws StructurizrClientException, Exception {
+        WorkspaceMetadata workspaceMetadata = _workspaceMetadataByName.get(nonCatalogWorkspace.getName());
+        String name = nonCatalogWorkspace.getName();
 
         if (workspaceMetadata == null) {
             workspaceMetadata = createAdminApiClient().createWorkspace();
-            System.out.println("Created workspace [" + workspaceMetadata.getId() + "] for [" + workspace.getName() +"]");
-            _workspaceMetadataByName.put(workspace.getName(), workspaceMetadata);
-            _workspacesByName.put(workspace.getName(), workspace);
+            System.out.println("Created workspace [" + workspaceMetadata.getId() + "] for [" + name +"]");
+            _workspaceMetadataByName.put(name, workspaceMetadata);
+            _workspacesByName.put(name, nonCatalogWorkspace);
         }
-        
-        workspace.setId(workspaceMetadata.getId());
-        
-        // Clone to catalog
-        Workspace catalogWorkspace = _catalogWorkspacesByName.get(workspace.getName());
+        nonCatalogWorkspace.setId(workspaceMetadata.getId());
+
+        Workspace catalogWorkspace = _catalogWorkspacesByName.get(name);
         if (catalogWorkspace == null) {
-            catalogWorkspace = WorkspaceUtils.fromJson(WorkspaceUtils.toJson(workspace, false));
+            catalogWorkspace = WorkspaceUtils.fromJson(WorkspaceUtils.toJson(nonCatalogWorkspace, false));
             _catalogWorkspacesByName.put(catalogWorkspace.getName(), catalogWorkspace);
             catalogWorkspace.setId(workspaceMetadata.getId());
+        }
 
-            if (StringUtils.isNullOrEmpty(workspaceMetadata.getName())){
-                WorkspaceApiClient workspaceApiClient = createWorkspaceApiClient(workspaceMetadata);
-                workspaceApiClient.setWorkspaceArchiveLocation(null);
-
-                System.out.println("Updating name of workspace id [" + workspaceMetadata.getId() + "] to [" + workspace.getName() +"] OnPrem");
-                workspaceApiClient.putWorkspace(workspaceMetadata.getId(), catalogWorkspace);
-            }
+        // If the names differ, it was a new workspace. Push it up so all is in sync.
+        // Then repull metadata so we have the updated name.
+        if (!catalogWorkspace.getName().equals(workspaceMetadata.getName())){
+            WorkspaceApiClient workspaceApiClient = createWorkspaceApiClient(workspaceMetadata);
+            System.out.println("Updating name of workspace id [" + workspaceMetadata.getId() + "] to [" + name +"] OnPrem");
+            workspaceApiClient.putWorkspace(workspaceMetadata.getId(), catalogWorkspace);
+            catalogWorkspace.setId(workspaceMetadata.getId());
+            PullWorkspaces();
         }
 
         return catalogWorkspace;
@@ -193,7 +211,7 @@ public class StructurizrAdapter {
      * @throws StructurizrClientException If a Structurizr API error occurs
      */
     public void SaveWorkspacesLocal(String baseWorkspacesFilePath) throws Exception, StructurizrClientException {
-        for (Workspace workspace: _workspacesByName.values()) {
+        for (Workspace workspace: _catalogWorkspacesByName.values()) {
             String folderPath = baseWorkspacesFilePath + "/" + workspace.getName();
             Path path = Path.of(folderPath);
             Files.createDirectories(path);
@@ -208,7 +226,6 @@ public class StructurizrAdapter {
      * 
      * @param workspaceName Name of the workspace to save
      * @param directoryPath Direct path to the directory where files should be saved (no subdirectories)
-     * @throws Exception If an error occurs during saving
      * @throws StructurizrClientException If a Structurizr API error occurs
      */
     public void SaveWorkspaceLocal(String workspaceName, String directoryPath) throws Exception, StructurizrClientException {
@@ -228,11 +245,21 @@ public class StructurizrAdapter {
                 System.out.println("New DSL file in " + path);
                 String dslRendered = "";
                 if (catalogWorkspace.getConfiguration().getScope() == WorkspaceScope.SoftwareSystem) {
-                    String dslIdentifier = catalogWorkspace.getModel().getSoftwareSystemWithName(catalogWorkspace.getName())
-                            .getProperties().get(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME);
+                    SoftwareSystem system = catalogWorkspace.getModel().getSoftwareSystemWithName(catalogWorkspace.getName());
+                    String dslIdentifier = system.getProperties().get(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME);
                     dslRendered = systemDslTemplate
                         .replace("{% workspace_path %}", "catalog-workspace.json")
                         .replace("{% system_dsl_name %}", dslIdentifier);
+                    
+                    StringBuilder containerDslNames = new StringBuilder();
+                    for (Container container : system.getContainers()) {
+                        containerDslNames
+                            .append("            !element \"")
+                            .append(container.getProperties().get(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME))
+                            .append("\" {").append("\n").append("            }").append("\n\n");
+                    }
+                    
+                    dslRendered = dslRendered.replace("{% containers %}", containerDslNames);
                 }
                 else {
                     dslRendered = landscapeDslTemplate
@@ -263,20 +290,8 @@ public class StructurizrAdapter {
         }
     }
 
-    public void AddWorkspaceToCatalogLandscape(Workspace workspace) throws IllegalArgumentException, Exception {
-        Workspace catalogSystemLandscapeWorkspace = _catalogWorkspacesByName.get(StructurizrAdapter.LANDSCAPE_WORKSPACE_NAME);
-        // Whether the landscape was updated
+    public void AddWorkspaceToCatalogLandscape(Workspace workspace, Workspace landscape) throws IllegalArgumentException, Exception {
         boolean isDirty = false;
-        if (catalogSystemLandscapeWorkspace == null) {
-            Workspace hostedLandscape = _workspacesByName.get(StructurizrAdapter.LANDSCAPE_WORKSPACE_NAME);
-            if (hostedLandscape != null){
-                catalogSystemLandscapeWorkspace = RegisterCatalogWorkspace(hostedLandscape);
-            }
-            else {
-                catalogSystemLandscapeWorkspace = createShellWorkspace(StructurizrAdapter.LANDSCAPE_WORKSPACE_NAME, "The Trimble Architectural System Landscape", WorkspaceScope.Landscape);
-                isDirty = true;
-            }
-        }
 
         SoftwareSystem softwareSystem = workspace.getModel().getSoftwareSystemWithName(workspace.getName());
         if (softwareSystem == null) {
@@ -285,9 +300,9 @@ public class StructurizrAdapter {
         }
 
         System.out.println("Adding [" + workspace.getName() + "] to landscape.");
-        SoftwareSystem softwareSystemInLandscape = catalogSystemLandscapeWorkspace.getModel().getSoftwareSystemWithName(softwareSystem.getName());
+        SoftwareSystem softwareSystemInLandscape = landscape.getModel().getSoftwareSystemWithName(softwareSystem.getName());
         if (softwareSystemInLandscape == null){
-            softwareSystemInLandscape = catalogSystemLandscapeWorkspace.getModel().addSoftwareSystem(softwareSystem.getName());
+            softwareSystemInLandscape = landscape.getModel().addSoftwareSystem(softwareSystem.getName());
             softwareSystemInLandscape.setDescription(softwareSystem.getDescription());
             Map<String, String> props = softwareSystem.getProperties();
             for (String key : props.keySet()) {
@@ -301,25 +316,30 @@ public class StructurizrAdapter {
             isDirty = true;
         }
 
-        softwareSystemInLandscape.setUrl("{workspace:" + workspace.getId() + "}/diagrams#SystemContext");
+        setUrl(softwareSystemInLandscape, workspace.getId());
 
-        boolean newRelations = findAndCloneRelationships(workspace, catalogSystemLandscapeWorkspace);
+        boolean newRelations = findAndCloneRelationships(workspace, landscape);
         if (newRelations) {
             isDirty = true;
         }
 
-        SystemLandscapeView landscapeView = catalogSystemLandscapeWorkspace.getViews().getSystemLandscapeViews().stream().filter(lsView -> lsView.getKey().equals(LANDSCAPE_WORKSPACE_NAME)).findFirst().orElse(null);
+        SystemLandscapeView landscapeView = landscape.getViews().getSystemLandscapeViews().stream().filter(lsView -> lsView.getKey().equals(LANDSCAPE_WORKSPACE_NAME)).findFirst().orElse(null);
         if (landscapeView == null) {
-            landscapeView = catalogSystemLandscapeWorkspace.getViews().createSystemLandscapeView(LANDSCAPE_WORKSPACE_NAME, "An automatically generated system landscape view.");
+            landscapeView = landscape.getViews().createSystemLandscapeView(LANDSCAPE_WORKSPACE_NAME, "An automatically generated system landscape view.");
             isDirty = true;
         }
 
-        if (isDirty || catalogSystemLandscapeWorkspace.getLastModifiedDate() == null){
-            catalogSystemLandscapeWorkspace.setLastModifiedDate(new Date());
+        if (isDirty || landscape.getLastModifiedDate() == null){
+            landscape.setLastModifiedDate(new Date());
         }
 
         //TODO: Should be fine to run every time, but it is unclear what it actually accomplishes
         landscapeView.addAllElements();
+    }
+
+    public void setUrl(SoftwareSystem softwareSystem, Long workspaceId ){
+        //softwareSystem.setUrl("{workspace:" + workspaceId + "}/diagrams#Containers");
+        softwareSystem.setUrl(_apiConnection.url + "/share/" + workspaceId + "/diagrams#Containers");
     }
 
     public AdminApiClient createAdminApiClient() {
@@ -340,8 +360,7 @@ public class StructurizrAdapter {
         workspace.getModel().addProperty(STRUCTURIZR_GROUP_SEPARATOR_PROPERTY_NAME, "/");
 
         if (scope == WorkspaceScope.SoftwareSystem){
-            SoftwareSystem softwareSystem = workspace.getModel().addSoftwareSystem(name, description);
-            softwareSystem.setUrl("{workspace:" + workspace.getId() + "}/diagrams#SystemContext");
+            workspace.getModel().addSoftwareSystem(name, description);
         }
         workspace.setLastModifiedDate(new Date());
 
@@ -414,15 +433,6 @@ public class StructurizrAdapter {
     public void clear() {
         _workspacesByName.clear();
         _catalogWorkspacesByName.clear();
-    }
-
-    /**
-     * Adds a workspace to the catalog workspaces
-     * Uses the workspace name as the system name
-     * @param workspace The workspace to add
-     */
-    public void addCatalogWorkspace(Workspace workspace) {
-        _catalogWorkspacesByName.put(workspace.getName(), workspace);
     }
     
     /**
