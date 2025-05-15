@@ -31,7 +31,7 @@ public class StructurizrAdapter {
 
 
     Map<String,Workspace> _catalogWorkspacesByName = new HashMap<>();
-    Map<String,Workspace> _workspacesByName = new HashMap<>();
+    Map<String,Workspace> _hostedWorkspacesByName = new HashMap<>();
     Map<String, WorkspaceMetadata> _workspaceMetadataByName = new HashMap<>();
     private ApiConnection _apiConnection;
 
@@ -44,40 +44,27 @@ public class StructurizrAdapter {
      */
     public void PullWorkspaces() throws StructurizrClientException {
         // Clear existing data
-        _workspacesByName.clear();
+        _hostedWorkspacesByName.clear();
         _catalogWorkspacesByName.clear();
         _workspaceMetadataByName.clear();
         
         // Pull new data
         List<WorkspaceMetadata> workspaceMetadata = createAdminApiClient().getWorkspaces();
         for (WorkspaceMetadata metadata : workspaceMetadata) {
-            _workspaceMetadataByName.put(metadata.getName(), metadata);
+            _workspaceMetadataByName.put(metadata.getName().toLowerCase(), metadata);
             WorkspaceApiClient apiClient = createWorkspaceApiClient(metadata);
             apiClient.setMergeFromRemote(true);
             Workspace workspace = apiClient.getWorkspace(metadata.getId());
-            _workspacesByName.put(metadata.getName(), workspace);
+            _hostedWorkspacesByName.put(metadata.getName().toLowerCase(), workspace);
         }
     }
 
     public Workspace GetWorkspace(String name) {
-        return _workspacesByName.get(name);
-    }
-
-    public Workspace GetWorkspaceById(String id) {
-        for (Workspace existingWorkspace : _workspacesByName.values()) {
-            if (String.valueOf(existingWorkspace.getId()).equals(id)) {
-                return existingWorkspace;
-            }
-        }
-        return null;
+        return _hostedWorkspacesByName.get(name.toLowerCase());
     }
 
     public Workspace GetCatalogWorkspace(String name) {
-        return _catalogWorkspacesByName.get(name);
-    }
-
-    public Collection<Workspace> GetWorkspaces() {
-        return _workspacesByName.values();
+        return _catalogWorkspacesByName.get(name.toLowerCase());
     }
 
     public Collection<Workspace> GetCatalogWorkspaces() {
@@ -103,21 +90,21 @@ public class StructurizrAdapter {
     }
     
     public Workspace RegisterCatalogWorkspace(Workspace nonCatalogWorkspace) throws StructurizrClientException, Exception {
-        WorkspaceMetadata workspaceMetadata = _workspaceMetadataByName.get(nonCatalogWorkspace.getName());
-        String name = nonCatalogWorkspace.getName();
+        WorkspaceMetadata workspaceMetadata = _workspaceMetadataByName.get(nonCatalogWorkspace.getName().toLowerCase());
+        String name = nonCatalogWorkspace.getName().toLowerCase();
 
         if (workspaceMetadata == null) {
             workspaceMetadata = createAdminApiClient().createWorkspace();
             System.out.println("Created workspace [" + workspaceMetadata.getId() + "] for [" + name +"]");
             _workspaceMetadataByName.put(name, workspaceMetadata);
-            _workspacesByName.put(name, nonCatalogWorkspace);
+            _hostedWorkspacesByName.put(name, nonCatalogWorkspace);
         }
         nonCatalogWorkspace.setId(workspaceMetadata.getId());
 
         Workspace catalogWorkspace = _catalogWorkspacesByName.get(name);
         if (catalogWorkspace == null) {
             catalogWorkspace = WorkspaceUtils.fromJson(WorkspaceUtils.toJson(nonCatalogWorkspace, false));
-            _catalogWorkspacesByName.put(catalogWorkspace.getName(), catalogWorkspace);
+            _catalogWorkspacesByName.put(catalogWorkspace.getName().toLowerCase(), catalogWorkspace);
             catalogWorkspace.setId(workspaceMetadata.getId());
         }
 
@@ -134,35 +121,27 @@ public class StructurizrAdapter {
         return catalogWorkspace;
     }
 
-    public boolean ContentsAreEqual(Workspace workspace1, Workspace workspace2) throws Exception{
-        Workspace tempWorkspace1 = WorkspaceUtils.fromJson(WorkspaceUtils.toJson(workspace1, false));
-        Workspace tempWorkspace2 = WorkspaceUtils.fromJson(WorkspaceUtils.toJson(workspace2, false));
-
-        tempWorkspace1.setLastModifiedDate(tempWorkspace2.getLastModifiedDate());
-        tempWorkspace1.setLastModifiedAgent("");
-        tempWorkspace1.setLastModifiedUser("");
-        tempWorkspace2.setLastModifiedAgent("");
-        tempWorkspace2.setLastModifiedUser("");
-
-        // Remove all the relationship dsl identifiers.
-        // They appear to dispense random guids that are not updated on push
-        for (Relationship relationship: tempWorkspace1.getModel().getRelationships()){
-            relationship.addProperty(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME, "x");
+    public String WorkSpaceSnapshotForComparison(Workspace workspace)  throws Exception {
+        if (workspace == null){
+            return "";
         }
-        for (Relationship relationship: tempWorkspace2.getModel().getRelationships()){
+
+        Workspace tempWorkspace = WorkspaceUtils.fromJson(WorkspaceUtils.toJson(workspace, false));
+
+        tempWorkspace.setLastModifiedDate(new Date(0L));
+        tempWorkspace.setLastModifiedAgent("");
+        tempWorkspace.setLastModifiedUser("");
+
+        for (Relationship relationship: tempWorkspace.getModel().getRelationships()){
             relationship.addProperty(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME, "x");
         }
 
-        String workspace1AsString = WorkspaceUtils.toJson(tempWorkspace1, false);
-        String workspace2AsString = WorkspaceUtils.toJson(tempWorkspace2, false);
-
-        return workspace1AsString.equals(workspace2AsString);
+        return  WorkspaceUtils.toJson(tempWorkspace, false);
     }
 
-    // Verify whether LastModifiedDate changes with update to workspace-backstage.json and/or DSL changes
     public void PushWorkspaces(File baseWorkspacesFilePath) throws Exception, StructurizrClientException {
         for (WorkspaceMetadata workspaceMetadata: _workspaceMetadataByName.values()) {
-            Workspace hostedWorkspace = _workspacesByName.get(workspaceMetadata.getName());
+            Workspace hostedWorkspace = _hostedWorkspacesByName.get(workspaceMetadata.getName().toLowerCase());
             String folderPath = baseWorkspacesFilePath + "/" + hostedWorkspace.getName();
             Path path = Path.of(folderPath);
             File workspaceDslFile = new File(path.toFile(), "workspace.dsl");
@@ -187,8 +166,12 @@ public class StructurizrAdapter {
 
                 localDslWorkspace.getViews().copyLayoutInformationFrom(localJsonWorkspace.getViews());
 
-                if (!ContentsAreEqual(localDslWorkspace, hostedWorkspace)){
-                    System.out.println("Workspace [" + workspaceMetadata.getName() + "] differs from the hosted version. Pushing to OnPrem.");
+                String localWSString = WorkSpaceSnapshotForComparison(localDslWorkspace);
+                String hostedWSString =  WorkSpaceSnapshotForComparison(hostedWorkspace);
+
+                if (!localWSString.equals(hostedWSString)){
+                    System.out.println("Workspace [" + workspaceMetadata.getName() + " - ID:" +
+                            workspaceMetadata.getId()+"] differs from the hosted version. Pushing to OnPrem.");
                     WorkspaceApiClient workspaceApiClient = createWorkspaceApiClient(workspaceMetadata);
                     workspaceApiClient.setMergeFromRemote(false);
                     workspaceApiClient.putWorkspace(workspaceMetadata.getId(), localDslWorkspace);
@@ -198,7 +181,7 @@ public class StructurizrAdapter {
                 }
             }
             else {
-                System.out.println("The onPrem workspace [" + workspaceMetadata.getName() + "] did not have a corresponding folder locally. This may indicate some shenanigans with renaming that should be resolved.");
+                System.out.println("The onPrem workspace [" + workspaceMetadata.getName() + "] does not appear to be managed in this repo.");
             }
         }
     }
@@ -212,6 +195,7 @@ public class StructurizrAdapter {
      */
     public void saveWorkspacesLocal(Path basePath) throws Exception, StructurizrClientException {
         for (String systemName : _catalogWorkspacesByName.keySet()) {
+            systemName = systemName.toLowerCase();
             Path systemDir = basePath.resolve(systemName);
             Files.createDirectories(systemDir);
             saveWorkspaceLocal(systemName, systemDir.toString());
@@ -227,52 +211,114 @@ public class StructurizrAdapter {
      * @throws StructurizrClientException If a Structurizr API error occurs
      */
     public void saveWorkspaceLocal(String workspaceName, String directoryPath) throws Exception, StructurizrClientException {
-        // Load templates from classpath resources
-        String landscapeDslTemplate = loadResourceAsString("/TokenizedLandscapeWorkspace.dsl");
-        String systemDslTemplate = loadResourceAsString("/TokenizedSystemWorkspace.dsl");
 
-        Workspace catalogWorkspace = _catalogWorkspacesByName.get(workspaceName);
+        Workspace catalogWorkspace = _catalogWorkspacesByName.get(workspaceName.toLowerCase());
         if (catalogWorkspace != null) {
             Path path = Path.of(directoryPath);
             File catalogWorkspaceJson = new File(path.toFile(), "catalog-workspace.json");
             WorkspaceUtils.saveWorkspaceToJson(catalogWorkspace, catalogWorkspaceJson);
 
-            // Initialize the workspace DSL
-            File workspaceDslFile = new File(path.toFile(), "workspace.dsl");
-            if (!workspaceDslFile.exists()) {
-                System.out.println("New DSL file in " + path);
-                String dslRendered = "";
-                if (catalogWorkspace.getConfiguration().getScope() == WorkspaceScope.SoftwareSystem) {
-                    SoftwareSystem system = catalogWorkspace.getModel().getSoftwareSystemWithName(catalogWorkspace.getName());
-                    String dslIdentifier = system.getProperties().get(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME);
-                    dslRendered = systemDslTemplate
+            saveWorkspaceDSL(path, catalogWorkspace);
+
+            stubDocs(path, catalogWorkspace);
+        }
+    }
+
+    /**
+     * Creates initial documentation structure with templates
+     *
+     * @param path Base path where documentation should be created
+     * @param workspace Name of the workspace for template customization
+     * @throws Exception If an error occurs during file operations
+     */
+    private void stubDocs(Path path, Workspace workspace) throws Exception {
+        String docsIndexTemplate = loadResourceAsString("/tokenizedWorkspaceDocIndex.md");
+        String adrTemplate = loadResourceAsString("/0000-adr-template.md");
+        String mkdocsTemplate = loadResourceAsString("/mkdocs-template.yaml");
+
+        mkdocsTemplate = mkdocsTemplate
+                .replace("{% system-name %}", workspace.getName())
+                .replace("{% system-description %}", workspace.getDescription());
+
+        Path mkdocsFile = path.resolve("mkdocs.yaml");
+        if (!Files.exists(mkdocsFile)) {
+            Files.writeString(
+                    mkdocsFile,
+                    mkdocsTemplate,
+                    java.nio.file.StandardOpenOption.CREATE,
+                    java.nio.file.StandardOpenOption.TRUNCATE_EXISTING
+            );
+        }
+
+        docsIndexTemplate = docsIndexTemplate
+                .replace("{% system-name %}", workspace.getName())
+                .replace("{% workspace-id %}", String.valueOf(workspace.getId()))
+                .replace("{% system-url %}", DefaultUrl(workspace));
+
+        Path docsPath = path.resolve("docs");
+        Files.createDirectories(docsPath);
+
+        Path adrPath = path.resolve("adrs");
+        Files.createDirectories(adrPath);
+
+        Path indexFile = docsPath.resolve("index.md");
+        if (!Files.exists(indexFile)) {
+            Files.writeString(
+                    indexFile,
+                    docsIndexTemplate,
+                    java.nio.file.StandardOpenOption.CREATE,
+                    java.nio.file.StandardOpenOption.TRUNCATE_EXISTING
+            );
+        }
+
+        Path adrTemplateFile = adrPath.resolve("0000-adr-template.md");
+        if (!Files.exists(adrTemplateFile)) {
+            Files.writeString(
+                    adrTemplateFile,
+                    adrTemplate,
+                    java.nio.file.StandardOpenOption.CREATE,
+                    java.nio.file.StandardOpenOption.TRUNCATE_EXISTING
+            );
+        }
+    }
+
+    private void saveWorkspaceDSL(Path path, Workspace workspace) throws Exception {
+        File workspaceDslFile = new File(path.toFile(), "workspace.dsl");
+        String landscapeDslTemplate = loadResourceAsString("/TokenizedLandscapeWorkspace.dsl");
+        String systemDslTemplate = loadResourceAsString("/TokenizedSystemWorkspace.dsl");
+
+        if (!workspaceDslFile.exists()) {
+            System.out.println("New DSL file in " + path);
+            String dslRendered = "";
+            if (workspace.getConfiguration().getScope() == WorkspaceScope.SoftwareSystem) {
+                SoftwareSystem system = workspace.getModel().getSoftwareSystemWithName(workspace.getName());
+                String dslIdentifier = system.getProperties().get(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME);
+                dslRendered = systemDslTemplate
                         .replace("{% workspace_path %}", "catalog-workspace.json")
                         .replace("{% system_dsl_name %}", dslIdentifier);
-                    
-                    StringBuilder containerDslNames = new StringBuilder();
-                    for (Container container : system.getContainers()) {
-                        containerDslNames
+
+                StringBuilder containerDslNames = new StringBuilder();
+                for (Container container : system.getContainers()) {
+                    containerDslNames
                             .append("            !element \"")
                             .append(container.getProperties().get(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME))
                             .append("\" {").append("\n").append("            }").append("\n\n");
-                    }
-                    
-                    dslRendered = dslRendered.replace("{% containers %}", containerDslNames);
-                }
-                else {
-                    dslRendered = landscapeDslTemplate
-                        .replace("{% workspace_path %}", "catalog-workspace.json");
                 }
 
-                Files.writeString(
+                dslRendered = dslRendered.replace("{% containers %}", containerDslNames);
+            }
+            else {
+                dslRendered = landscapeDslTemplate
+                        .replace("{% workspace_path %}", "catalog-workspace.json");
+            }
+
+            Files.writeString(
                     workspaceDslFile.toPath(),
                     dslRendered,
                     java.nio.file.StandardOpenOption.CREATE,
                     java.nio.file.StandardOpenOption.TRUNCATE_EXISTING);
-            }
         }
     }
-
 
     /**
      * Load a resource file from the classpath as a string
@@ -289,7 +335,7 @@ public class StructurizrAdapter {
         }
     }
 
-    public void AddWorkspaceToCatalogLandscape(Workspace workspace, Workspace landscape) throws IllegalArgumentException, Exception {
+    public void addWorkspaceToCatalogLandscape(Workspace workspace, Workspace landscape) throws IllegalArgumentException, Exception {
         boolean isDirty = false;
 
         SoftwareSystem softwareSystem = workspace.getModel().getSoftwareSystemWithName(workspace.getName());
@@ -315,7 +361,7 @@ public class StructurizrAdapter {
             isDirty = true;
         }
 
-        setUrl(softwareSystemInLandscape, workspace.getId());
+        setPrimarySystemUrl(landscape);
 
         boolean newRelations = findAndCloneRelationships(workspace, landscape);
         if (newRelations) {
@@ -336,9 +382,160 @@ public class StructurizrAdapter {
         landscapeView.addAllElements();
     }
 
-    public void setUrl(SoftwareSystem softwareSystem, Long workspaceId ){
-        //softwareSystem.setUrl("{workspace:" + workspaceId + "}/diagrams#Containers");
-        softwareSystem.setUrl(_apiConnection.url + "/share/" + workspaceId + "/diagrams#Containers");
+    /**
+     * Cross-adds systems from hosted workspaces to catalog workspaces.
+     * For each system in the catalog workspaces, it examines all the hosted workspaces and adds any systems
+     * from hosted workspaces to the catalog workspace if they don't already exist.
+     * It also updates any newly included system tags from "idesign-mgr" to "idesign-resource-access".
+     * The system with the same name as the workspace should keep the "idesign-mgr" tag.
+     *
+     * @throws Exception If an error occurs during system addition
+     */
+    public void crossAddSystemsToCatalog() throws Exception {
+        // Iterate through each catalog workspace
+        for (Map.Entry<String, Workspace> catalogEntry : _catalogWorkspacesByName.entrySet()) {
+            String catalogWorkspaceName = catalogEntry.getKey();
+            Workspace catalogWorkspace = catalogEntry.getValue();
+
+            if (catalogWorkspace.getConfiguration().getScope() != WorkspaceScope.SoftwareSystem) {
+                continue;
+            }
+
+            System.out.println("Adding remote systems to core workspace for use in cross-system diagramming: " + catalogWorkspaceName);
+
+            String beforeCatalogWorkspaceString = WorkSpaceSnapshotForComparison(catalogWorkspace);
+
+            for (Map.Entry<String, Workspace> hostedEntry : _hostedWorkspacesByName.entrySet()) {
+                Workspace hostedWorkspace = hostedEntry.getValue();
+
+                if (hostedWorkspace.getConfiguration().getScope() != WorkspaceScope.SoftwareSystem) {
+                    continue;
+                }
+
+                // The primary system is named after the workspace
+                SoftwareSystem hostedSystem = hostedWorkspace.getModel().getSoftwareSystemWithName(hostedWorkspace.getName());
+                if (hostedSystem == null){
+                    System.out.println("Existing workspace " + hostedWorkspace.getName() +
+                            " does not have a system bearing its name and will not be added as a remote system to " + catalogWorkspaceName);
+                }
+
+                // Check if it already exists in the catalog workspace
+                String hostedDSL = hostedSystem.getProperties().get(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME);
+                String hostedName = hostedSystem.getName();
+                SoftwareSystem remoteSystem = catalogWorkspace.getModel().getSoftwareSystems().stream()
+                        .filter(maybeExisting ->
+                                hostedName.equalsIgnoreCase(maybeExisting.getName()) ||
+                                        hostedDSL.equalsIgnoreCase( maybeExisting.getProperties().get(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME)
+                               ))
+                        .findFirst()
+                        .orElse(null);
+
+                // upsert system from previous hosts
+                if (remoteSystem == null) {
+                    remoteSystem = catalogWorkspace.getModel().addSoftwareSystem(hostedName);
+
+                    // System doesn't exist in the catalog workspace, so add it
+                    System.out.println("  Adding system '" + hostedSystem.getName() + "' from hosted workspace '" +
+                            hostedWorkspace.getName() + "' to catalog workspace '" + catalogWorkspaceName + "'");
+                }
+
+                remoteSystem.setDescription(hostedSystem.getDescription());
+
+                Map<String, String> props = hostedSystem.getProperties();
+                for (String key : props.keySet()) {
+                    remoteSystem.addProperty(key, props.get(key));
+                }
+
+                for (Perspective perspective : hostedSystem.getPerspectives()) {
+                    remoteSystem.addPerspective(perspective.getName(), perspective.getDescription());
+                }
+
+                remoteSystem.setGroup(hostedSystem.getGroup());
+
+                // remote systems are considered resource-access in idesign, not mgrs
+                List<String> newTags = new ArrayList<>();
+                for (String tag : hostedSystem.getTagsAsSet()) {
+                    // Replace idesign-mgr with idesign-resource-access for non-primary systems
+                    if (tag.equals("idesign-mgr") && !hostedSystem.getName().equals(catalogWorkspaceName)) {
+                        newTags.add("idesign-resource-access");
+                    } else {
+                        newTags.add(tag);
+                    }
+                }
+                remoteSystem.addTags(newTags.toArray(new String[0]));
+
+                remoteSystem.setUrl(hostedSystem.getUrl());
+            }
+
+            boolean newRelations = crossAddRelationships(catalogWorkspace);
+
+            String afterCatalogWorkspaceString = WorkSpaceSnapshotForComparison(catalogWorkspace);
+
+            // Update last modified date if changes were made
+            if (!beforeCatalogWorkspaceString.equals(afterCatalogWorkspaceString)) {
+                catalogWorkspace.setLastModifiedDate(new Date());
+            }
+        }
+    }
+
+    /**
+     * Adds relationships between systems in a workspace
+     *
+     * @param workspace The workspace to update
+     * @return true if any relationships were added
+     */
+    private boolean crossAddRelationships(Workspace workspace) {
+        boolean changed = false;
+
+        // Get all software systems in the workspace
+        Collection<SoftwareSystem> systems = workspace.getModel().getSoftwareSystems();
+
+        // For each hosted workspace, look for relationships between systems that exist in the catalog workspace
+        for (Workspace hostedWorkspace : _hostedWorkspacesByName.values()) {
+            for (Relationship relationship : hostedWorkspace.getModel().getRelationships()) {
+                if (relationship.getSource() instanceof SoftwareSystem &&
+                        relationship.getDestination() instanceof SoftwareSystem) {
+
+                    String sourceName = relationship.getSource().getName();
+                    String destName = relationship.getDestination().getName();
+
+                    // Find corresponding systems in the catalog workspace
+                    SoftwareSystem catalogSource = workspace.getModel().getSoftwareSystemWithName(sourceName);
+                    SoftwareSystem catalogDest = workspace.getModel().getSoftwareSystemWithName(destName);
+
+                    // If both systems exist and no relationship exists between them, create one
+                    if (catalogSource != null && catalogDest != null &&
+                            !catalogSource.hasEfferentRelationshipWith(catalogDest)) {
+
+                        Relationship newRelationship = catalogSource.uses(catalogDest, relationship.getDescription());
+                        newRelationship.addTags(relationship.getTags());
+
+                        System.out.println("  Added relationship from '" + sourceName + "' to '" + destName +
+                                "' in catalog workspace '" + workspace.getName() + "'");
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        return changed;
+    }
+
+    public String DefaultUrl(Workspace workspace){
+        SoftwareSystem primarySoftwareSystem = workspace.getModel().getSoftwareSystemWithName(workspace.getName());
+        if (primarySoftwareSystem != null){
+            return _apiConnection.url + "/share/" + workspace.getId() + "/diagrams#Containers";
+        }
+
+       return null;
+    }
+
+    public void setPrimarySystemUrl(Workspace workspace){
+        SoftwareSystem primarySoftwareSystem = workspace.getModel().getSoftwareSystemWithName(workspace.getName());
+        if (primarySoftwareSystem != null){
+            String url = DefaultUrl(workspace);
+            primarySoftwareSystem.setUrl(url);
+        }
     }
 
     public AdminApiClient createAdminApiClient() {
@@ -430,7 +627,7 @@ public class StructurizrAdapter {
      * Clears all workspaces from internal collections
      */
     public void clear() {
-        _workspacesByName.clear();
+        _hostedWorkspacesByName.clear();
         _catalogWorkspacesByName.clear();
     }
 }

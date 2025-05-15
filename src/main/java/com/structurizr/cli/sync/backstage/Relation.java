@@ -2,38 +2,20 @@ package com.structurizr.cli.sync.backstage;
 
 public class Relation {
 
-    public String type;
-    public String toTargetRef(){
-        return target.kind.toLowerCase() + ":" + target.namespace + "/" + target.name ;
+    public static final String BACKSTAGE_RELATION_TYPE_SUB_COMPONENT_OF = "subComponentOf";
+    public static final String BACKSTAGE_RELATION_TYPE_PART_OF = "partOf";
+    public static final String BACKSTAGE_RELATION_TYPE_DEPENDS_ON = "dependsOn";
+    public static final String BACKSTAGE_RELATION_TYPE_CONSUMES_API = "consumesApi";
+    public static final String BACKSTAGE_RELATION_TYPE_OWNED_BY = "ownedBy";
+
+    public Relation(String typeParm, EntityRef targetParm){
+        type = typeParm;
+        target = targetParm;
     }
-    public RelationTarget target;
-
-    /**
-     * Parses a targetRef string into a RelationTarget object
-     * Format expected: kind:namespace/name
-     *
-     * @param targetRef The target reference to parse
-     * @return A RelationTarget object, or null if the format is invalid
-     */
-    public static RelationTarget parseTargetRef(String targetRef) {
-        if (targetRef == null || targetRef.isEmpty()) {
-            return null;
-        }
-
-        // Parse the targetRef which should be in the format kind:namespace/name
-        int colonIndex = targetRef.indexOf(':');
-        int slashIndex = targetRef.indexOf('/', colonIndex);
-
-        if (colonIndex <= 0 || slashIndex <= colonIndex) {
-            return null; // Invalid format
-        }
-
-        RelationTarget target = new RelationTarget();
-        target.kind = targetRef.substring(0, colonIndex).toLowerCase();
-        target.namespace = targetRef.substring(colonIndex + 1, slashIndex);
-        target.name = targetRef.substring(slashIndex + 1);
-
-        return target;
+    public String type;
+    public EntityRef target;
+    public String toTargetRef(){
+        return Entity.toBackstageRef(target.kind, target.name, target.namespace);
     }
 }
 

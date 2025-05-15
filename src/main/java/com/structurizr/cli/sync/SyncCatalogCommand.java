@@ -2,7 +2,6 @@ package com.structurizr.cli.sync;
 
 import com.structurizr.Workspace;
 import com.structurizr.api.StructurizrClientException;
-import com.structurizr.api.WorkspaceMetadata;
 import com.structurizr.cli.AbstractCommand;
 import com.structurizr.cli.sync.backstage.BackstageAdapter;
 import com.structurizr.cli.sync.backstage.Entity;
@@ -104,11 +103,11 @@ public class SyncCatalogCommand extends AbstractCommand {
         File catalogFile = (inputType == InputType.YAML) ? new File(catalogLocation) : null;
 
         List<Entity> enitities = Arrays.stream(entities)
-                .filter(e -> BackstageAdapter.BACKSTAGE_ENTITY_KIND_SYSTEM.equals(e.kind))
+                .filter(e -> Entity.BACKSTAGE_ENTITY_KIND_SYSTEM.equals(e.kind))
                 .toList();
 
         for (Entity systemEntity : enitities) {
-            Long workspaceId = createCatalogSystem(systemEntity, structurizrAdapter);
+            Long workspaceId = createCatalogWorkspaceForSystem(systemEntity, structurizrAdapter);
 
             if (inputType == InputType.YAML) {
                 updateWorkspaceIdInCatalog(systemEntity, workspaceId, catalogFile);
@@ -116,6 +115,8 @@ public class SyncCatalogCommand extends AbstractCommand {
         }
 
         addContainersToSystems(entities, structurizrAdapter);
+
+        structurizrAdapter.crossAddSystemsToCatalog();
 
         buildRelationships(entities, structurizrAdapter);
 
@@ -125,7 +126,6 @@ public class SyncCatalogCommand extends AbstractCommand {
         //createNewCatalogLandscape(structurizrAdapter, StructurizrAdapter.LANDSCAPE_WORKSPACE_NAME);
 
         structurizrAdapter.saveWorkspacesLocal(archWorkspacesDir);
-
     }
 
     /**
@@ -173,8 +173,8 @@ public class SyncCatalogCommand extends AbstractCommand {
     /**
      * Processes a system entity to create a new workspace with appropriate ID
      */
-    private Long createCatalogSystem(Entity systemEntity, StructurizrAdapter structurizrAdapter) throws Exception {
-        String systemName = systemEntity.metadata.name;
+    private Long createCatalogWorkspaceForSystem(Entity systemEntity, StructurizrAdapter structurizrAdapter) throws Exception {
+        String systemName = systemEntity.metadata.name.toLowerCase();
         log.info("Processing system: " + systemName);
 
         Workspace fullWorkspace = structurizrAdapter.GetWorkspace(systemName);
@@ -197,8 +197,8 @@ public class SyncCatalogCommand extends AbstractCommand {
         
         // Create a new workspace that ONLY has the items from the catalog
         // This may be extended using DSL
-        Workspace catalogWorkspace = structurizrAdapter.createShellWorkspace(systemName, description, WorkspaceScope.SoftwareSystem);
-        catalogWorkspace = structurizrAdapter.RegisterCatalogWorkspace(catalogWorkspace);
+        Workspace shellWorkspace = structurizrAdapter.createShellWorkspace(systemName, description, WorkspaceScope.SoftwareSystem);
+        Workspace catalogWorkspace = structurizrAdapter.RegisterCatalogWorkspace(shellWorkspace);
         Long workspaceId = catalogWorkspace.getId();
 
         SoftwareSystem softwareSystem = catalogWorkspace.getModel().getSoftwareSystemWithName(systemName);
@@ -213,7 +213,7 @@ public class SyncCatalogCommand extends AbstractCommand {
             softwareSystem.addProperty(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME, 
                                       systemEntity.metadata.name.replaceAll("\\W", ""));
 
-            structurizrAdapter.setUrl(softwareSystem, catalogWorkspace.getId());
+            structurizrAdapter.setPrimarySystemUrl(catalogWorkspace);
 
             String[] themes = catalogWorkspace.getViews().getConfiguration().getThemes();
             if (!Arrays.asList(themes).contains("idesignTheme")) {
@@ -340,10 +340,10 @@ public class SyncCatalogCommand extends AbstractCommand {
     private void addContainersToSystems(Entity[] entities, StructurizrAdapter structurizrAdapter) throws Exception {
         // Add Containers
         for (Entity entity : entities) {
-            if (BackstageAdapter.BACKSTAGE_ENTITY_KIND_COMPONENT.equals(entity.kind) || 
-                BackstageAdapter.BACKSTAGE_ENTITY_KIND_RESOURCE.equals(entity.kind)) {
-                if (!StringUtils.isNullOrEmpty(entity.spec.system)) {
-                    String softwareSystemName = entity.spec.system;
+            if (Entity.BACKSTAGE_ENTITY_KIND_COMPONENT.equals(entity.kind) ||
+                    Entity.BACKSTAGE_ENTITY_KIND_RESOURCE.equals(entity.kind)) {
+                if (!StringUtils.isNullOrEmpty(entity.spec.systemRef().target.name)) {
+                    String softwareSystemName = entity.spec.systemRef().target.name;
                     Workspace catalogWorkspace = structurizrAdapter.GetCatalogWorkspace(softwareSystemName);
                     if (catalogWorkspace == null) {
                         throw new Exception("No workspace found for software system: " + softwareSystemName);
@@ -373,7 +373,7 @@ public class SyncCatalogCommand extends AbstractCommand {
             }
         }
     }
-    
+
     /**
      * Build relationships between elements based on the catalog entities
      */
@@ -389,10 +389,11 @@ public class SyncCatalogCommand extends AbstractCommand {
             // find relationships from containers
             for (Entity entity : entities) {
                 for (Relation relation : entity.relations) {
-                    if (!BackstageAdapter.BACKSTAGE_ENTITY_KIND_SYSTEM.equalsIgnoreCase(relation.target.kind) &&
-                            !BackstageAdapter.BACKSTAGE_ENTITY_KIND_COMPONENT.equalsIgnoreCase(relation.target.kind) &&
-                            !BackstageAdapter.BACKSTAGE_ENTITY_KIND_RESOURCE.equalsIgnoreCase(relation.target.kind)
+                    if (!Entity.BACKSTAGE_ENTITY_KIND_SYSTEM.equalsIgnoreCase(relation.target.kind) &&
+                            !Entity.BACKSTAGE_ENTITY_KIND_COMPONENT.equalsIgnoreCase(relation.target.kind) &&
+                            !Entity.BACKSTAGE_ENTITY_KIND_RESOURCE.equalsIgnoreCase(relation.target.kind)
                     ){
+                        log.info("Skipping unhandled relationship " +  relation.target.kind);
                         continue;
                     }
 
@@ -400,15 +401,13 @@ public class SyncCatalogCommand extends AbstractCommand {
                     // If the source is a System, we should only target systems
                     // If the source is Component, we should only create relationships to other Components.
 
-                    if (BackstageAdapter.BACKSTAGE_RELATION_TYPE_PART_OF.equalsIgnoreCase(relation.type) ||
-                            BackstageAdapter.BACKSTAGE_RELATION_TYPE_DEPENDS_ON.equalsIgnoreCase(relation.type) ||
-                            BackstageAdapter.BACKSTAGE_RELATION_TYPE_CONSUMES_API.equalsIgnoreCase(relation.type)) {
+                    if (Relation.BACKSTAGE_RELATION_TYPE_PART_OF.equalsIgnoreCase(relation.type) ||
+                            Relation.BACKSTAGE_RELATION_TYPE_DEPENDS_ON.equalsIgnoreCase(relation.type) ||
+                            Relation.BACKSTAGE_RELATION_TYPE_CONSUMES_API.equalsIgnoreCase(relation.type)) {
 
                         StaticStructureElement source =  (StaticStructureElement) structurizrAdapter.GetCatalogElementByRef(entity.toBackstageRef());
-
                         Element destination = structurizrAdapter.GetCatalogElementByRef(relation.toTargetRef());
 
-                        //TODO: Let's implement some checks to make sure relationships don't violate C4
                         if (source != null && destination != null) {
                             if (destination instanceof SoftwareSystem) {
                                 if (source instanceof SoftwareSystem) {
@@ -451,7 +450,7 @@ public class SyncCatalogCommand extends AbstractCommand {
                     }
                     landscape = structurizrAdapter.RegisterCatalogWorkspace(landscape);
                 }
-                structurizrAdapter.AddWorkspaceToCatalogLandscape(systemWorkspace, landscape);
+                structurizrAdapter.addWorkspaceToCatalogLandscape(systemWorkspace, landscape);
                 log.info("Added " + systemWorkspace.getName() + " to landscape");
             } catch (Exception e) {
                 log.error("Failed to add workspace to landscape: " + systemWorkspace.getName(), e);

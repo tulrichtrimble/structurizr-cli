@@ -14,17 +14,26 @@ workspace extends {% workspace_path %} {
         // }
 
         !element {% system_dsl_name %} {
+            !adrs /adrs
+            !docs /docs
+
 {% containers %}
         }
     }
     
     views {
+        container {% system_dsl_name %} Containers {
+            include *
+        }
+
         SystemContext {% system_dsl_name %} SystemContext {
             include *
         }
 
-        container {% system_dsl_name %} Containers {
+        systemLandscape AllSystems "All available systems"{
             include *
+            !impliedRelationships false
+            autoLayout tb
         }
     }
 

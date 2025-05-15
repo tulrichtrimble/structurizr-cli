@@ -1,6 +1,6 @@
 package com.structurizr.cli.sync.backstage;
 
-public class RelationTarget {
+public class EntityRef {
     public String kind;
     public String name;
     public String namespace;

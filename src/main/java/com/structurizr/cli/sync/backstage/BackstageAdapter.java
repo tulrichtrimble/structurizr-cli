@@ -23,17 +23,6 @@ import java.util.List;
 import java.util.regex.Pattern;
 
 public class BackstageAdapter {
-
-    public static final String BACKSTAGE_ENTITY_KIND_DOMAIN = "Domain";
-    public static final String BACKSTAGE_ENTITY_KIND_SYSTEM = "System";
-    public static final String BACKSTAGE_ENTITY_KIND_COMPONENT = "Component";
-    public static final String BACKSTAGE_ENTITY_KIND_RESOURCE = "Resource";
-    // YAML just defined PartOf
-    public static final String BACKSTAGE_RELATION_TYPE_SUB_COMPONENT_OF = "subComponentOf";
-    public static final String BACKSTAGE_RELATION_TYPE_PART_OF = "partOf";
-    public static final String BACKSTAGE_RELATION_TYPE_DEPENDS_ON = "dependsOn";
-    public static final String BACKSTAGE_RELATION_TYPE_CONSUMES_API = "consumesApi";
-    public static final String BACKSTAGE_RELATION_TYPE_OWNED_BY = "ownedBy";
     public static final String BACKSTAGE_REF_PROPERTY_NAME = "backstage.ref";
     public static final String BACKSTAGE_SYSTEM_NAME = "backstage-system";
 
@@ -119,7 +108,7 @@ public class BackstageAdapter {
         return objectMapper.readValue(json, Entity[].class);
     }
 
-    private Entity[] parseYamlEntities(String yaml) throws IOException {
+    private Entity[] parseYamlEntities(String yaml) throws Exception, IOException {
         ObjectMapper yamlMapper = new ObjectMapper(new YAMLFactory());
         yamlMapper.configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
         
@@ -138,31 +127,21 @@ public class BackstageAdapter {
                     entity.metadata.namespace = "default";
                 }
                 if (entity.spec != null) {
-                    // Add owner relation
-                    if (entity.spec.owner != null) {
-                        entity.relations.add(createRelation("owner", "default", entity.spec.owner));
-                    }
-                    if (entity.spec.domain != null) {
-                        entity.relations.add(createRelation("domain", "default", entity.spec.domain));
-                    }
-                    if (entity.spec.system != null) {
-                        entity.relations.add(createRelation("system", "default", entity.spec.system));
-                    }
-                    if (entity.spec.subdomainOf != null) {
-                        entity.relations.add(createRelation("subdomainOf", "default", entity.spec.subdomainOf));
-                    }
+                    entity.addRelation(entity.spec.ownerRef());
+                    entity.addRelation(entity.spec.domainRef());
+                    entity.addRelation(entity.spec.subdomainOfRef());
+                    entity.addRelation(entity.spec.systemRef());
+                    entity.addRelation(entity.spec.subcomponentOfRef());
+
                     if (entity.spec.consumesApis != null) {
-                        for (String api : entity.spec.consumesApis) {
-                            entity.relations.add(createRelation("consumesApi", "default", api));
+                        for (Relation ref : entity.spec.consumesApisRefs()) {
+                            entity.addRelation(ref);
                         }
                     }
                     if (entity.spec.dependsOn != null) {
-                        for (String dependsOn : entity.spec.dependsOn) {
-                            entity.relations.add(createRelation("dependsOn", "default", dependsOn));
+                        for (Relation ref : entity.spec.dependsOnRefs()) {
+                            entity.addRelation(ref);
                         }
-                    }
-                    if (entity.spec.subcomponentOf != null) {
-                        entity.relations.add(createRelation("subcomponentOf", "default", entity.spec.subcomponentOf));
                     }
                 }
 
@@ -171,64 +150,5 @@ public class BackstageAdapter {
         }
 
         return entities.toArray(new Entity[0]);
-    }
-
-    private Relation createRelation(String specKind, String namespace, String targetName) {
-        String relationType = null;
-
-        RelationTarget relationTarget = new RelationTarget();
-        relationTarget.namespace = namespace;
-
-        //Hard code from values first
-        if (specKind.toLowerCase().equals("owner")) {
-            relationTarget.kind = "group";
-            relationType = BACKSTAGE_RELATION_TYPE_OWNED_BY;
-        }
-        else if (specKind.toLowerCase().equals("system")) {
-            relationTarget.kind = "system";
-            relationType = BACKSTAGE_RELATION_TYPE_PART_OF;
-        }
-        else if (specKind.toLowerCase().equals("domain")) {
-            relationTarget.kind = "domain";
-            relationType = BACKSTAGE_RELATION_TYPE_PART_OF;
-        }
-        else if (specKind.equals("subdomainOf")) {
-            relationTarget.kind = "domain";
-            relationType = BACKSTAGE_RELATION_TYPE_PART_OF;
-        }
-        else if (specKind.equals("dependsOn")) {
-            relationTarget.kind = "component";
-            relationType = BACKSTAGE_RELATION_TYPE_DEPENDS_ON;
-        }
-        else if (specKind.equals("consumesApi")) {
-            relationTarget.kind = "component";
-            relationType = BACKSTAGE_RELATION_TYPE_CONSUMES_API;
-        }
-        else if (specKind.equals("subcomponentOf")) {
-            relationTarget.kind = "component";
-            relationType = BACKSTAGE_RELATION_TYPE_CONSUMES_API;
-        }
-
-        //TODO: Unsupported relations might fall through the cracks.
-
-        // Override if TargetRef is provided
-        if (targetName.contains(":")){
-            relationTarget.kind = specKind;
-            relationTarget = Relation.parseTargetRef(targetName);
-        }
-        else
-        {
-            relationTarget.name = targetName;
-        }
-
-        Relation relation = new Relation();
-        relation.type = relationType;
-        relation.target = relationTarget;
-
-        return relation;
-    }
-
-    protected String toBackstageRef(Entity entity) {
-        return entity.kind.toLowerCase() + ":" + entity.metadata.namespace + "/" + entity.metadata.name;
     }
 }
