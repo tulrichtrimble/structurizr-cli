@@ -19,8 +19,6 @@ import java.io.File;
 import java.io.IOException;
 import java.io.FileInputStream;
 import java.io.FileWriter;
-import java.net.URI;
-import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -105,11 +103,11 @@ public class SyncCatalogCommand extends AbstractCommand {
 
         File catalogFile = (inputType == InputType.YAML) ? new File(catalogLocation) : null;
 
-        List<Entity> systems = Arrays.stream(entities)
+        List<Entity> enitities = Arrays.stream(entities)
                 .filter(e -> BackstageAdapter.BACKSTAGE_ENTITY_KIND_SYSTEM.equals(e.kind))
                 .toList();
 
-        for (Entity systemEntity : systems) {
+        for (Entity systemEntity : enitities) {
             Long workspaceId = createCatalogSystem(systemEntity, structurizrAdapter);
 
             if (inputType == InputType.YAML) {
@@ -121,20 +119,13 @@ public class SyncCatalogCommand extends AbstractCommand {
 
         buildRelationships(entities, structurizrAdapter);
 
-        configureSystemViews(structurizrAdapter);
-
         //TODO:
         // We can use this to create one or more landscapes owned by a repo
         // The architecture-repository repo will have to be updated and categorized by domain.
         //createNewCatalogLandscape(structurizrAdapter, StructurizrAdapter.LANDSCAPE_WORKSPACE_NAME);
-        
-        // Save workspaces locally
-        for (String systemName : structurizrAdapter.getCatalogSystemNames()) {
-            Path systemDir = archWorkspacesDir.resolve(systemName);
-            Files.createDirectories(systemDir);
-            structurizrAdapter.SaveWorkspaceLocal(systemName, systemDir.toString());
-            log.info("Saved catalog workspace for system " + systemName + " to " + systemDir);
-        }
+
+        structurizrAdapter.saveWorkspacesLocal(archWorkspacesDir);
+
     }
 
     /**
@@ -204,7 +195,7 @@ public class SyncCatalogCommand extends AbstractCommand {
         String description = systemEntity.metadata.description != null ? 
             systemEntity.metadata.description : systemName + " System";
         
-        // Create a new workspace the ONLY has the items from the catalog
+        // Create a new workspace that ONLY has the items from the catalog
         // This may be extended using DSL
         Workspace catalogWorkspace = structurizrAdapter.createShellWorkspace(systemName, description, WorkspaceScope.SoftwareSystem);
         catalogWorkspace = structurizrAdapter.RegisterCatalogWorkspace(catalogWorkspace);
@@ -223,6 +214,11 @@ public class SyncCatalogCommand extends AbstractCommand {
                                       systemEntity.metadata.name.replaceAll("\\W", ""));
 
             structurizrAdapter.setUrl(softwareSystem, catalogWorkspace.getId());
+
+            String[] themes = catalogWorkspace.getViews().getConfiguration().getThemes();
+            if (!Arrays.asList(themes).contains("idesignTheme")) {
+                catalogWorkspace.getViews().getConfiguration().addTheme(StructurizrAdapter.IDESIGN_THEME_URL);
+            }
         }
 
         log.info("Created catalog workspace for system: " + systemName + " with ID " + workspaceId);
@@ -431,32 +427,6 @@ public class SyncCatalogCommand extends AbstractCommand {
 
             if (relationship != null) {
                 workspace.setLastModifiedDate(new Date());
-            }
-        }
-    }
-    
-    /**
-     * Configure views for software system workspaces and add them to the landscape
-     */
-    private void configureSystemViews(StructurizrAdapter structurizrAdapter) {
-        List<Workspace> systemWorkspaces = new ArrayList<>();
-        
-        // Create a stable copy of the collection to prevent concurrent modification
-        for (Workspace workspace : structurizrAdapter.GetCatalogWorkspaces()) {
-            // Skip the landscape workspace
-            if (workspace.getConfiguration().getScope() == WorkspaceScope.SoftwareSystem) {
-                SoftwareSystem softwareSystem = workspace.getModel().getSoftwareSystemWithName(workspace.getName());
-
-                if (softwareSystem == null) {
-                    log.warn("Can't configure views for workspace " + workspace.getName() + " without a software system.");
-                    continue;
-                }
-
-                systemWorkspaces.add(workspace);
-                String[] themes = workspace.getViews().getConfiguration().getThemes();
-                if (!Arrays.asList(themes).contains("idesignTheme")) {
-                    workspace.getViews().getConfiguration().addTheme(StructurizrAdapter.IDESIGN_THEME_URL);
-                }
             }
         }
     }

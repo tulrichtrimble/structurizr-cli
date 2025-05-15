@@ -206,18 +206,16 @@ public class StructurizrAdapter {
     /**
      * Saves all workspaces locally with template-based DSL files to separate subdirectories
      * 
-     * @param baseWorkspacesFilePath Base path where workspace subdirectories will be created
+     * @param basePath Base path where workspace subdirectories will be created
      * @throws Exception If an error occurs during saving
      * @throws StructurizrClientException If a Structurizr API error occurs
      */
-    public void SaveWorkspacesLocal(String baseWorkspacesFilePath) throws Exception, StructurizrClientException {
-        for (Workspace workspace: _catalogWorkspacesByName.values()) {
-            String folderPath = baseWorkspacesFilePath + "/" + workspace.getName();
-            Path path = Path.of(folderPath);
-            Files.createDirectories(path);
-            System.out.println("Updating local workspace:" + path);
-
-            SaveWorkspaceLocal(workspace.getName(), path.toString());
+    public void saveWorkspacesLocal(Path basePath) throws Exception, StructurizrClientException {
+        for (String systemName : _catalogWorkspacesByName.keySet()) {
+            Path systemDir = basePath.resolve(systemName);
+            Files.createDirectories(systemDir);
+            saveWorkspaceLocal(systemName, systemDir.toString());
+            System.out.println("Saved catalog workspace for system " + systemName + " to " + systemDir);
         }
     }
 
@@ -228,7 +226,7 @@ public class StructurizrAdapter {
      * @param directoryPath Direct path to the directory where files should be saved (no subdirectories)
      * @throws StructurizrClientException If a Structurizr API error occurs
      */
-    public void SaveWorkspaceLocal(String workspaceName, String directoryPath) throws Exception, StructurizrClientException {
+    public void saveWorkspaceLocal(String workspaceName, String directoryPath) throws Exception, StructurizrClientException {
         // Load templates from classpath resources
         String landscapeDslTemplate = loadResourceAsString("/TokenizedLandscapeWorkspace.dsl");
         String systemDslTemplate = loadResourceAsString("/TokenizedSystemWorkspace.dsl");
@@ -274,6 +272,7 @@ public class StructurizrAdapter {
             }
         }
     }
+
 
     /**
      * Load a resource file from the classpath as a string
@@ -433,13 +432,5 @@ public class StructurizrAdapter {
     public void clear() {
         _workspacesByName.clear();
         _catalogWorkspacesByName.clear();
-    }
-    
-    /**
-     * Gets a list of all catalog workspace names
-     * @return List of system names
-     */
-    public List<String> getCatalogSystemNames() {
-        return new ArrayList<>(_catalogWorkspacesByName.keySet());
     }
 }
