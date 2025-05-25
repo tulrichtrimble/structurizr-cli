@@ -10,6 +10,11 @@ public class Entity {
     public static final String BACKSTAGE_ENTITY_KIND_RESOURCE = "Resource";
     public static final String BACKSTAGE_ENTITY_KIND_OWNER = "Owner";
 
+    public static final String BACKSTAGE_COMPONENT_SPEC_TYPE_SERVICE = "service";
+    public static final String BACKSTAGE_COMPONENT_SPEC_TYPE_WEBSITE = "website";
+    public static final String BACKSTAGE_COMPONENT_SPEC_TYPE_LIBRARY = "library";
+
+
     public String kind;
     public EntityMetadata metadata;
     public EntitySpec spec;

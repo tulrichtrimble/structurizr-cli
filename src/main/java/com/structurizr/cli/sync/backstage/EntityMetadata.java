@@ -8,7 +8,7 @@ public class EntityMetadata {
     public String namespace;
     public String name;
     public String description;
-    public Collection<? extends String> tags;
+    public Collection<String> tags;
     public Map<String, String> annotations;
 
 }

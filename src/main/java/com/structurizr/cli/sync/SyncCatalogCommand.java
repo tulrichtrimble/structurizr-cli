@@ -116,6 +116,8 @@ public class SyncCatalogCommand extends AbstractCommand {
 
         addContainersToSystems(entities, structurizrAdapter);
 
+        addComponentsToContainers(entities, structurizrAdapter);
+
         structurizrAdapter.crossAddSystemsToCatalog();
 
         buildRelationships(entities, structurizrAdapter);
@@ -197,29 +199,14 @@ public class SyncCatalogCommand extends AbstractCommand {
         
         // Create a new workspace that ONLY has the items from the catalog
         // This may be extended using DSL
-        Workspace shellWorkspace = structurizrAdapter.createShellWorkspace(systemName, description, WorkspaceScope.SoftwareSystem);
+        Workspace shellWorkspace = structurizrAdapter.createShellWorkspace(
+                systemName,
+                description,
+                systemEntity.metadata.tags,
+                systemEntity.metadata.namespace,
+                WorkspaceScope.SoftwareSystem);
         Workspace catalogWorkspace = structurizrAdapter.RegisterCatalogWorkspace(shellWorkspace);
         Long workspaceId = catalogWorkspace.getId();
-
-        SoftwareSystem softwareSystem = catalogWorkspace.getModel().getSoftwareSystemWithName(systemName);
-        if (softwareSystem != null) {
-            if (systemEntity.metadata.tags != null && !systemEntity.metadata.tags.isEmpty()) {
-                softwareSystem.addTags(systemEntity.metadata.tags.toArray(new String[0]));
-            }
-
-            softwareSystem.addProperty(BackstageAdapter.BACKSTAGE_REF_PROPERTY_NAME, 
-                                     "system:" + systemEntity.metadata.namespace + "/" + systemName);
-
-            softwareSystem.addProperty(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME, 
-                                      systemEntity.metadata.name.replaceAll("\\W", ""));
-
-            structurizrAdapter.setPrimarySystemUrl(catalogWorkspace);
-
-            String[] themes = catalogWorkspace.getViews().getConfiguration().getThemes();
-            if (!Arrays.asList(themes).contains("idesignTheme")) {
-                catalogWorkspace.getViews().getConfiguration().addTheme(StructurizrAdapter.IDESIGN_THEME_URL);
-            }
-        }
 
         log.info("Created catalog workspace for system: " + systemName + " with ID " + workspaceId);
 
@@ -340,7 +327,9 @@ public class SyncCatalogCommand extends AbstractCommand {
     private void addContainersToSystems(Entity[] entities, StructurizrAdapter structurizrAdapter) throws Exception {
         // Add Containers
         for (Entity entity : entities) {
-            if (Entity.BACKSTAGE_ENTITY_KIND_COMPONENT.equals(entity.kind) ||
+            // Skip components of type 'library' - they will be handled by addComponentsToContainers
+            if ((Entity.BACKSTAGE_ENTITY_KIND_COMPONENT.equals(entity.kind) && 
+                    !Entity.BACKSTAGE_COMPONENT_SPEC_TYPE_LIBRARY.equals(entity.spec.type)) ||
                     Entity.BACKSTAGE_ENTITY_KIND_RESOURCE.equals(entity.kind)) {
                 if (!StringUtils.isNullOrEmpty(entity.spec.systemRef().target.name)) {
                     String softwareSystemName = entity.spec.systemRef().target.name;
@@ -359,10 +348,32 @@ public class SyncCatalogCommand extends AbstractCommand {
                             container.setDescription(entity.metadata.description);
                             container.addProperty(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME, dslIdentifier);
                             container.addProperty(BackstageAdapter.BACKSTAGE_REF_PROPERTY_NAME, entity.toBackstageRef());
-                            
-                            // Add tags if available
+
                             if (entity.metadata.tags != null && !entity.metadata.tags.isEmpty()) {
                                 container.addTags(entity.metadata.tags.toArray(new String[0]));
+                            }
+
+                            // Add iDesign tag if not already present
+                            boolean hasIDesignTag = false;
+                            for (String tag : container.getTagsAsSet()) {
+                                if (tag.startsWith("idesign-")) {
+                                    hasIDesignTag = true;
+                                    break;
+                                }
+                            }
+                            
+                            if (!hasIDesignTag) {
+                                if (Entity.BACKSTAGE_ENTITY_KIND_COMPONENT.equals(entity.kind)) {
+                                    if (entity.spec != null && entity.spec.type != null) {
+                                        if (Entity.BACKSTAGE_COMPONENT_SPEC_TYPE_SERVICE.equals(entity.spec.type)) {
+                                            container.addTags("idesign-mgr");
+                                        } else if (Entity.BACKSTAGE_COMPONENT_SPEC_TYPE_WEBSITE.equals(entity.spec.type)) {
+                                            container.addTags("idesign-client");
+                                        }
+                                    }
+                                } else if (Entity.BACKSTAGE_ENTITY_KIND_RESOURCE.equals(entity.kind)) {
+                                    container.addTags("idesign-utility");
+                                }
                             }
                         }
                     }
@@ -372,6 +383,165 @@ public class SyncCatalogCommand extends AbstractCommand {
                 }
             }
         }
+    }
+
+
+    private void addComponentsToContainers(Entity[] entities, StructurizrAdapter structurizrAdapter) throws Exception {
+        // Add library components to their parent containers
+        for (Entity entity : entities) {
+            // Only process components of type 'library'
+            if (Entity.BACKSTAGE_ENTITY_KIND_COMPONENT.equals(entity.kind) && 
+                    Entity.BACKSTAGE_COMPONENT_SPEC_TYPE_LIBRARY.equals(entity.spec.type)) {
+                
+                // Get the system reference to find the correct workspace
+                if (!StringUtils.isNullOrEmpty(entity.spec.systemRef().target.name)) {
+                    String softwareSystemName = entity.spec.systemRef().target.name;
+                    Workspace catalogWorkspace = structurizrAdapter.GetCatalogWorkspace(softwareSystemName);
+                    
+                    if (catalogWorkspace == null) {
+                        log.warn("No workspace found for software system: " + softwareSystemName + 
+                                " when processing component: " + entity.metadata.name);
+                        continue;
+                    }
+                    
+                    SoftwareSystem softwareSystem = catalogWorkspace.getModel().getSoftwareSystemWithName(softwareSystemName);
+                    if (softwareSystem != null) {
+                        // Check if component depends on any containers
+                        Relation[] dependsOnRelations = entity.spec.dependsOnRefs();
+                        
+                        if (dependsOnRelations.length == 0) {
+                            // If no dependencies, try to find the primary container (same name as system)
+                            Container primaryContainer = softwareSystem.getContainerWithName(softwareSystemName);
+                            
+                            if (primaryContainer != null) {
+                                log.info("Library component [" + entity.metadata.name + 
+                                        "] does not have any dependencies defined. Adding to primary container [" + 
+                                        primaryContainer.getName() + "]");
+                                
+                                Component component = primaryContainer.addComponent(entity.metadata.name, entity.metadata.description);
+                                catalogWorkspace.setLastModifiedDate(new Date());
+                                
+                                // Set properties and tags
+                                String dslIdentifier = primaryContainer.getProperties().get(
+                                    StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME) + 
+                                    "." + entity.metadata.name.replaceAll("\\W", "");
+                                component.addProperty(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME, dslIdentifier);
+                                component.addProperty(BackstageAdapter.BACKSTAGE_REF_PROPERTY_NAME, entity.toBackstageRef());
+                                
+                                if (entity.metadata.tags != null && !entity.metadata.tags.isEmpty()) {
+                                    component.addTags(entity.metadata.tags.toArray(new String[0]));
+                                }
+                            } else {
+                                log.warn("Component [" + entity.metadata.name + 
+                                        "] does not belong to any container or system. It has no dependencies defined " +
+                                        "and no primary container with name [" + softwareSystemName + "] exists.");
+                            }
+                            
+                            continue;
+                        }
+                        
+                        // Process each dependency to find parent containers
+                        for (Relation dependsOnRelation : dependsOnRelations) {
+                            String dependencyName = dependsOnRelation.target.name;
+                            Container parentContainer = softwareSystem.getContainerWithName(dependencyName);
+                            
+                            // If no direct container found, check if it's a component-to-component dependency
+                            if (parentContainer == null) {
+                                log.info("No direct container found for [" + dependencyName + "]. Checking if it's a component...");
+                                
+                                // Try to find the target component's container by traversing the dependency chain
+                                Container containerForComponent = findContainerForComponent(entities, softwareSystem, dependsOnRelation.target.name);
+                                
+                                if (containerForComponent != null) {
+                                    log.info("Found container [" + containerForComponent.getName() + 
+                                            "] for component [" + dependencyName + "]");
+                                    parentContainer = containerForComponent;
+                                }
+                            }
+                            
+                            // If still no container found after traversing dependencies, skip this relation
+                            if (parentContainer == null) {
+                                log.warn("Could not find container for [" + dependencyName + 
+                                        "] in system [" + softwareSystemName + 
+                                        "] for library component [" + entity.metadata.name + 
+                                        "], even after traversing dependencies");
+                                continue;
+                            }
+                            
+                            // Add the component to the parent container
+                            Component component = parentContainer.addComponent(entity.metadata.name, 
+                                entity.metadata.description != null ? entity.metadata.description : entity.metadata.name);
+                            catalogWorkspace.setLastModifiedDate(new Date());
+                            
+                            // Set properties and tags
+                            String dslIdentifier = parentContainer.getProperties().get(
+                                StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME) + 
+                                "." + entity.metadata.name.replaceAll("\\W", "");
+                            component.addProperty(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME, dslIdentifier);
+                            component.addProperty(BackstageAdapter.BACKSTAGE_REF_PROPERTY_NAME, entity.toBackstageRef());
+                            
+                            if (entity.metadata.tags != null && !entity.metadata.tags.isEmpty()) {
+                                component.addTags(entity.metadata.tags.toArray(new String[0]));
+                            }
+                            
+                            log.info("Added library component [" + entity.metadata.name + 
+                                    "] to container [" + parentContainer.getName() + 
+                                    "] in system [" + softwareSystemName + "]");
+                        }
+                    } else {
+                        log.info("Software system [" + softwareSystemName + 
+                                "] not found when processing component [" + entity.metadata.name + "]");
+                    }
+                } else {
+                    log.info("Library component [" + entity.metadata.name + 
+                            "] does not have a system reference and will be ignored.");
+                }
+            }
+        }
+    }
+    
+    /**
+     * Helper method to find the container for a component by traversing dependencies
+     * This helps when a component depends on another component which in turn is in a container
+     */
+    private Container findContainerForComponent(Entity[] entities, SoftwareSystem softwareSystem, String componentName) {
+        // Find the component entity by name
+        for (Entity entity : entities) {
+            if (Entity.BACKSTAGE_ENTITY_KIND_COMPONENT.equals(entity.kind) && 
+                    entity.metadata.name.equals(componentName)) {
+                
+                try {
+                    // Case 1: Component is directly in a container (not library type)
+                    if (!Entity.BACKSTAGE_COMPONENT_SPEC_TYPE_LIBRARY.equals(entity.spec.type)) {
+                        // Non-library components should be containers in the system
+                        return softwareSystem.getContainerWithName(componentName);
+                    }
+                    
+                    // Case 2: Component depends on containers or other components
+                    Relation[] dependsOnRelations = entity.spec.dependsOnRefs();
+                    if (dependsOnRelations.length > 0) {
+                        for (Relation dependsOnRelation : dependsOnRelations) {
+                            // Check if this dependency is a direct container
+                            Container container = softwareSystem.getContainerWithName(dependsOnRelation.target.name);
+                            if (container != null) {
+                                return container;
+                            }
+                            
+                            // Recursively check this dependency's dependencies
+                            // (but limit recursion depth to avoid infinite loops)
+                            container = findContainerForComponent(entities, softwareSystem, dependsOnRelation.target.name);
+                            if (container != null) {
+                                return container;
+                            }
+                        }
+                    }
+                } catch (Exception e) {
+                    log.error("Error while traversing dependencies for component [" + componentName + "]", e);
+                }
+            }
+        }
+        
+        return null;
     }
 
     /**
@@ -446,7 +616,11 @@ public class SyncCatalogCommand extends AbstractCommand {
                 if (landscape == null) {
                     landscape = structurizrAdapter.GetWorkspace(landscapeName);
                     if (landscape == null){
-                        landscape = structurizrAdapter.createShellWorkspace(landscapeName, "The Trimble Architectural System Landscape", WorkspaceScope.Landscape);
+                        landscape = structurizrAdapter.createShellWorkspace(landscapeName,
+                                "The Trimble Architectural System Landscape",
+                                null, // tags
+                                "default",  // namespace
+                                WorkspaceScope.Landscape);
                     }
                     landscape = structurizrAdapter.RegisterCatalogWorkspace(landscape);
                 }

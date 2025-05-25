@@ -45,7 +45,6 @@ public class StructurizrAdapter {
     public void PullWorkspaces() throws StructurizrClientException {
         // Clear existing data
         _hostedWorkspacesByName.clear();
-        _catalogWorkspacesByName.clear();
         _workspaceMetadataByName.clear();
         
         // Pull new data
@@ -115,6 +114,9 @@ public class StructurizrAdapter {
             System.out.println("Updating name of workspace id [" + workspaceMetadata.getId() + "] to [" + name +"] OnPrem");
             workspaceApiClient.putWorkspace(workspaceMetadata.getId(), catalogWorkspace);
             catalogWorkspace.setId(workspaceMetadata.getId());
+
+            // update metadata so it has new name
+            // also pulls all workspaces again, though it probably doesn't need to
             PullWorkspaces();
         }
 
@@ -549,14 +551,26 @@ public class StructurizrAdapter {
         return workspaceApiClient;
     }
 
-    public Workspace createShellWorkspace(String name, String description, WorkspaceScope scope){
+    public Workspace createShellWorkspace(String name, String description, Collection<String> tags, String namespace, WorkspaceScope scope){
         Workspace workspace = new Workspace(name, description);
         workspace.getConfiguration().setScope(scope);
         workspace.getViews().getConfiguration().addTheme(IDESIGN_THEME_URL);
         workspace.getModel().addProperty(STRUCTURIZR_GROUP_SEPARATOR_PROPERTY_NAME, "/");
 
         if (scope == WorkspaceScope.SoftwareSystem){
-            workspace.getModel().addSoftwareSystem(name, description);
+            SoftwareSystem softwareSystem = workspace.getModel().addSoftwareSystem(name, description);
+
+            if (tags != null && !tags.isEmpty()) {
+                softwareSystem.addTags(tags.toArray(new String[0]));
+            }
+
+            softwareSystem.addProperty(BackstageAdapter.BACKSTAGE_REF_PROPERTY_NAME,
+                    "system:" + namespace + "/" + softwareSystem.getName());
+
+            softwareSystem.addProperty(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME,
+                    softwareSystem.getName().replaceAll("\\W", ""));
+
+            setPrimarySystemUrl(workspace);
         }
         workspace.setLastModifiedDate(new Date());
 
