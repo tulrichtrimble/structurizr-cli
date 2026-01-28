@@ -6,6 +6,7 @@ import com.structurizr.api.StructurizrClientException;
 import com.structurizr.api.WorkspaceApiClient;
 import com.structurizr.api.WorkspaceMetadata;
 import com.structurizr.cli.sync.backstage.BackstageAdapter;
+import com.structurizr.documentation.Decision;
 import com.structurizr.dsl.StructurizrDslParser;
 import com.structurizr.configuration.WorkspaceScope;
 import com.structurizr.model.*;
@@ -28,7 +29,7 @@ public class StructurizrAdapter {
     public static final String STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME = "structurizr.dsl.identifier";
     public static final String OWNER_PERSPECTIVE_NAME = "Owner";
     public static final String IDESIGN_THEME_URL = "https://raw.githubusercontent.com/tulrichtrimble/backstage-repository/main/idesign_theme.json";
-
+    public static final String PERSONAS_URL = "https://raw.githubusercontent.com/tulrichtrimble/backstage-repository/main/personas.dsl";
 
     Map<String,Workspace> _catalogWorkspacesByName = new HashMap<>();
     Map<String,Workspace> _hostedWorkspacesByName = new HashMap<>();
@@ -54,11 +55,13 @@ public class StructurizrAdapter {
             WorkspaceApiClient apiClient = createWorkspaceApiClient(metadata);
             apiClient.setMergeFromRemote(true);
             Workspace workspace = apiClient.getWorkspace(metadata.getId());
+            // reset the hosted URL in case it changed
+            setPrimarySystemUrl(workspace);
             _hostedWorkspacesByName.put(metadata.getName().toLowerCase(), workspace);
         }
     }
 
-    public Workspace GetWorkspace(String name) {
+    public Workspace GetHostedWorkspace(String name) {
         return _hostedWorkspacesByName.get(name.toLowerCase());
     }
 
@@ -87,36 +90,66 @@ public class StructurizrAdapter {
 
         return null;
     }
-    
-    public Workspace RegisterCatalogWorkspace(Workspace nonCatalogWorkspace) throws StructurizrClientException, Exception {
-        WorkspaceMetadata workspaceMetadata = _workspaceMetadataByName.get(nonCatalogWorkspace.getName().toLowerCase());
-        String name = nonCatalogWorkspace.getName().toLowerCase();
+
+    /**
+     * Registers a workspace in the catalog and ensures it exists in hosted workspaces
+     * with proper ID and URL assignments
+     *
+     * @param shellWorkspace The workspace to register
+     * @return The registered catalog workspace with proper IDs and URLs
+     */
+    public Workspace RegisterCatalogWorkspace(Workspace shellWorkspace) throws StructurizrClientException, Exception {
+        String name = shellWorkspace.getName().toLowerCase();
+        WorkspaceMetadata workspaceMetadata = _workspaceMetadataByName.get(name);
+        boolean isNewWorkspace = false;
+        boolean metadataChanged = false;
 
         if (workspaceMetadata == null) {
             workspaceMetadata = createAdminApiClient().createWorkspace();
-            System.out.println("Created workspace [" + workspaceMetadata.getId() + "] for [" + name +"]");
+            isNewWorkspace = true;
+            metadataChanged = true;
             _workspaceMetadataByName.put(name, workspaceMetadata);
-            _hostedWorkspacesByName.put(name, nonCatalogWorkspace);
+            System.out.println("Created workspace [" + workspaceMetadata.getId() + "] for [" + name +"]");
         }
-        nonCatalogWorkspace.setId(workspaceMetadata.getId());
+
+        // Let's just make sure the ID is correct
+        int workspaceId = workspaceMetadata.getId();
+        shellWorkspace.setId(workspaceId);
+        setPrimarySystemUrl(shellWorkspace);
+        Workspace hostedWorkspace = _hostedWorkspacesByName.get(name);
+
+        if (hostedWorkspace != null) {
+            if (hostedWorkspace.getId() != workspaceId) {
+                hostedWorkspace.setId(workspaceId);
+                setPrimarySystemUrl(hostedWorkspace);
+                metadataChanged = true;
+            }
+        } else {
+            hostedWorkspace = WorkspaceUtils.fromJson(WorkspaceUtils.toJson(shellWorkspace, false));
+            _hostedWorkspacesByName.put(name, hostedWorkspace);
+            metadataChanged = true;
+        }
 
         Workspace catalogWorkspace = _catalogWorkspacesByName.get(name);
         if (catalogWorkspace == null) {
-            catalogWorkspace = WorkspaceUtils.fromJson(WorkspaceUtils.toJson(nonCatalogWorkspace, false));
-            _catalogWorkspacesByName.put(catalogWorkspace.getName().toLowerCase(), catalogWorkspace);
-            catalogWorkspace.setId(workspaceMetadata.getId());
+            catalogWorkspace = WorkspaceUtils.fromJson(WorkspaceUtils.toJson(shellWorkspace, false));
+            _catalogWorkspacesByName.put(name, catalogWorkspace);
+        }
+        else {
+            // Ensure catalog workspace has the correct ID but preserve its content
+            if (catalogWorkspace.getId() != workspaceId) {
+                catalogWorkspace.setId(workspaceId);
+                setPrimarySystemUrl(catalogWorkspace);
+                metadataChanged = true;
+            }
         }
 
-        // If the names differ, it was a new workspace. Push it up so all is in sync.
-        // Then repull metadata so we have the updated name.
-        if (!catalogWorkspace.getName().equals(workspaceMetadata.getName())){
+        if (metadataChanged || !catalogWorkspace.getName().equals(workspaceMetadata.getName())) {
             WorkspaceApiClient workspaceApiClient = createWorkspaceApiClient(workspaceMetadata);
-            System.out.println("Updating name of workspace id [" + workspaceMetadata.getId() + "] to [" + name +"] OnPrem");
-            workspaceApiClient.putWorkspace(workspaceMetadata.getId(), catalogWorkspace);
-            catalogWorkspace.setId(workspaceMetadata.getId());
+            System.out.println("Updating metadata for workspace [" + name + "] with ID [" + workspaceId + "] on server");
+            workspaceApiClient.putWorkspace(workspaceId, hostedWorkspace);
 
-            // update metadata so it has new name
-            // also pulls all workspaces again, though it probably doesn't need to
+            // Refresh metadata to ensure everything is in sync
             PullWorkspaces();
         }
 
@@ -134,8 +167,28 @@ public class StructurizrAdapter {
         tempWorkspace.setLastModifiedAgent("");
         tempWorkspace.setLastModifiedUser("");
 
+        // A dynamic DSL identifier may be assigned to an unnamed variable
+        // Let's put a placeholder so it's always constant
+        for (Element element:tempWorkspace.getModel().getElements() ){
+            element.addProperty(STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME, "x");
+        }
         for (Relationship relationship: tempWorkspace.getModel().getRelationships()){
             relationship.addProperty(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME, "x");
+        }
+
+        // Documents get reparsed
+        for (Decision decision:tempWorkspace.getDocumentation().getDecisions()){
+            decision.setDate(new Date(0L));
+        }
+        for (SoftwareSystem system:  tempWorkspace.getModel().getSoftwareSystems()){
+            for (Decision decision:system.getDocumentation().getDecisions()){
+                decision.setDate(new Date(0L));
+            }
+            for (Container container:  system.getContainers()){
+                for (Decision decision:container.getDocumentation().getDecisions()){
+                    decision.setDate(new Date(0L));
+                }
+            }
         }
 
         return  WorkspaceUtils.toJson(tempWorkspace, false);
@@ -152,7 +205,7 @@ public class StructurizrAdapter {
                 StructurizrDslParser parser = new StructurizrDslParser();
                 parser.parse(workspaceDslFile);
                 Workspace localDslWorkspace = parser.getWorkspace();
-                localDslWorkspace.setLastModifiedDate(new Date());
+                localDslWorkspace.setLastModifiedDate(hostedWorkspace.getLastModifiedDate());
                 WorkspaceScopeValidatorFactory.getValidator(localDslWorkspace).validate(localDslWorkspace);
 
                 //Ensure a workspace.json file exists as parsed from DSL
@@ -300,14 +353,29 @@ public class StructurizrAdapter {
                         .replace("{% system_dsl_name %}", dslIdentifier);
 
                 StringBuilder containerDslNames = new StringBuilder();
+                StringBuilder containerInstances = new StringBuilder();
+                StringBuilder containersInDeploymentView = new StringBuilder();
+
                 for (Container container : system.getContainers()) {
                     containerDslNames
-                            .append("            !element \"")
+                        .append("            !element \"")
+                        .append(container.getProperties().get(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME))
+                        .append("\" {").append("\n").append("            }").append("\n\n");
+
+                    containerInstances
+                            .append("            containerInstance ")
                             .append(container.getProperties().get(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME))
-                            .append("\" {").append("\n").append("            }").append("\n\n");
+                            .append("\n");
+
+                    containersInDeploymentView
+                            .append("            include ")
+                            .append(container.getProperties().get(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME))
+                            .append("\n");
                 }
 
                 dslRendered = dslRendered.replace("{% containers %}", containerDslNames);
+                dslRendered = dslRendered.replace("{% container_instances %}", containerInstances);
+                dslRendered = dslRendered.replace("{% container_includes %}", containersInDeploymentView);
             }
             else {
                 dslRendered = landscapeDslTemplate
@@ -469,8 +537,6 @@ public class StructurizrAdapter {
                 remoteSystem.setUrl(hostedSystem.getUrl());
             }
 
-            boolean newRelations = crossAddRelationships(catalogWorkspace);
-
             String afterCatalogWorkspaceString = WorkSpaceSnapshotForComparison(catalogWorkspace);
 
             // Update last modified date if changes were made
@@ -494,7 +560,12 @@ public class StructurizrAdapter {
 
         // For each hosted workspace, look for relationships between systems that exist in the catalog workspace
         for (Workspace hostedWorkspace : _hostedWorkspacesByName.values()) {
-            for (Relationship relationship : hostedWorkspace.getModel().getRelationships()) {
+            Workspace sourceOfTruth = _catalogWorkspacesByName.get(hostedWorkspace.getName());
+            if (sourceOfTruth == null){
+                sourceOfTruth = hostedWorkspace;
+            }
+
+            for (Relationship relationship : sourceOfTruth.getModel().getRelationships()) {
                 if (relationship.getSource() instanceof SoftwareSystem &&
                         relationship.getDestination() instanceof SoftwareSystem) {
 
@@ -554,6 +625,9 @@ public class StructurizrAdapter {
     public Workspace createShellWorkspace(String name, String description, Collection<String> tags, String namespace, WorkspaceScope scope){
         Workspace workspace = new Workspace(name, description);
         workspace.getConfiguration().setScope(scope);
+
+        // causes CORS issues
+        //workspace.getViews().getConfiguration().addTheme(_apiConnection.url + "/workspace/2/theme");
         workspace.getViews().getConfiguration().addTheme(IDESIGN_THEME_URL);
         workspace.getModel().addProperty(STRUCTURIZR_GROUP_SEPARATOR_PROPERTY_NAME, "/");
 
@@ -570,7 +644,10 @@ public class StructurizrAdapter {
             softwareSystem.addProperty(StructurizrAdapter.STRUCTURIZR_DSL_IDENTIFIER_PROPERTY_NAME,
                     softwareSystem.getName().replaceAll("\\W", ""));
 
-            setPrimarySystemUrl(workspace);
+            // Only set the URL after the ID is known
+            if (workspace.getId() > 0) {
+                setPrimarySystemUrl(workspace);
+            }
         }
         workspace.setLastModifiedDate(new Date());
 

@@ -2,7 +2,7 @@ plugins {
 	id 'java'
 }
 
-defaultTasks 'clean', 'build', 'getDeps', 'copyToBin'//, 'buildZip'
+defaultTasks 'clean', 'build', 'getDeps', 'copyToBin', 'buildZip'
 
 description = 'Structurizr CLI'
 group = 'com.structurizr'

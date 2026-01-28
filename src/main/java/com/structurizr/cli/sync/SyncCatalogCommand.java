@@ -69,6 +69,9 @@ public class SyncCatalogCommand extends AbstractCommand {
         try {
             CommandLine cmd = commandLineParser.parse(options, args);
             url = cmd.getOptionValue("structurizrApiUrl", "https://arch-repo-fahxgzhxbqgbdmgt.centralus-01.azurewebsites.net");
+            if (url.endsWith("/")) {
+                url =  url.substring(0, url.length() - 1);
+            }
             key = cmd.getOptionValue("apiKey", "TYLER_API_KEY");
             workspaceRoot = cmd.getOptionValue("workspaces"); // May be null
             catalogLocation = cmd.getOptionValue(
@@ -153,6 +156,7 @@ public class SyncCatalogCommand extends AbstractCommand {
      */
     private Path determineWorkspaceDirectory(String catalogLocation, String workspaceRoot, InputType inputType) throws Exception {
         if (workspaceRoot != null) {
+            log.info("Creating workspace at explicitly provided path: " + workspaceRoot);
             // Use explicitly provided workspace directory
             Path workspacePath = Paths.get(workspaceRoot);
             Files.createDirectories(workspacePath);
@@ -160,7 +164,13 @@ public class SyncCatalogCommand extends AbstractCommand {
         } else if (inputType == InputType.YAML) {
             // For YAML input, create a docs/arch-workspaces directory where the catalog file resides
             File catalogFile = new File(catalogLocation);
-            Path catalogDir = catalogFile.getParentFile().toPath();
+            log.info("Looking for yaml at: " + catalogFile.getPath());
+            File catalogParent = catalogFile.getParentFile();
+            if (catalogParent == null){
+                log.info("catalog file not found. Check your path and re-read the readme file.");
+                return null;
+            }
+            Path catalogDir = catalogParent.toPath();
             Path docsDir = catalogDir.resolve("docs");
             Path archWorkspacesDir = docsDir.resolve("arch-workspaces");
             Files.createDirectories(archWorkspacesDir);
@@ -179,7 +189,7 @@ public class SyncCatalogCommand extends AbstractCommand {
         String systemName = systemEntity.metadata.name.toLowerCase();
         log.info("Processing system: " + systemName);
 
-        Workspace fullWorkspace = structurizrAdapter.GetWorkspace(systemName);
+        Workspace fullWorkspace = structurizrAdapter.GetHostedWorkspace(systemName);
         if (systemEntity.metadata.annotations != null && 
             systemEntity.metadata.annotations.containsKey(WORKSPACE_ID_ANNOTATION)) {
             String workspaceIdStringFromAnnotation = systemEntity.metadata.annotations.get(WORKSPACE_ID_ANNOTATION);
@@ -614,7 +624,7 @@ public class SyncCatalogCommand extends AbstractCommand {
                 // Try to get from the catalog, else the downloads, else create new
                 Workspace landscape = structurizrAdapter.GetCatalogWorkspace(landscapeName);
                 if (landscape == null) {
-                    landscape = structurizrAdapter.GetWorkspace(landscapeName);
+                    landscape = structurizrAdapter.GetHostedWorkspace(landscapeName);
                     if (landscape == null){
                         landscape = structurizrAdapter.createShellWorkspace(landscapeName,
                                 "The Trimble Architectural System Landscape",

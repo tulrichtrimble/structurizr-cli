@@ -45,6 +45,10 @@ public class SyncOnPremCommand extends AbstractCommand {
 
             CommandLine cmd = commandLineParser.parse(options, args);
             url = cmd.getOptionValue("structurizrApiUrl", "https://arch-repo-fahxgzhxbqgbdmgt.centralus-01.azurewebsites.net");
+
+            if (url.endsWith("/")) {
+                url =  url.substring(0, url.length() - 1);
+            }
             key = cmd.getOptionValue("apiKey", "TYLER_API_KEY");
             workspaceRoot = cmd.getOptionValue(
                     "workspaces",
@@ -55,7 +59,7 @@ public class SyncOnPremCommand extends AbstractCommand {
                 System.out.println("Loading local named workspaces from " + workspaceRoot);
             }
             else {
-                System.out.println("The workspace path " + workspaceRoot + " is invalid. Specify the --workspaces argument or run the command from the /structurizr/cli folder.");
+                System.out.println("The workspace path " + workspaceRoot + " is invalid.");
                 return;
             }
 
